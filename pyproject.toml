@@ -1,0 +1,33 @@
+[project]
+name = "ai-miniprogram-sop-agent"
+version = "0.1.0"
+description = "微信小程序新版本上线前的新增功能 SOP 自动化检查 Agent"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.141.0",
+    "uvicorn[standard]>=0.52.0",
+    "websockets>=14.0,<16.0",
+    "python-multipart>=0.0.32",
+    "langgraph>=1.2.11",
+    "langchain-core>=1.5.0",
+    "langchain-openai>=1.4.0",
+    "openai>=2.54.0",
+    "pydantic>=2.13.0",
+    "markdown-it-py>=4.2.0",
+    "pyyaml>=6.0.3",
+]
+
+[tool.setuptools.packages.find]
+where = ["backend"]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "httpx>=0.27.0",
+]
+
+[build-system]
+requires = ["setuptools>=75.0"]
+build-backend = "setuptools.build_meta"
