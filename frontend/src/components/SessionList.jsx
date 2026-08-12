@@ -1,5 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
-import { deleteSession } from '../api/client';
+import { useState } from 'react';
 import Modal from './Modal';
 
 const PHASE_LABELS = {
@@ -7,19 +6,8 @@ const PHASE_LABELS = {
   ready: '就绪', running: '检查中', completed: '已完成',
 };
 
-export default function SessionList({ currentId, onSelect, onNew, refreshKey }) {
-  const [sessions, setSessions] = useState([]);
+export default function SessionList({ sessions, currentId, onSelect, onNew, onDelete }) {
   const [deleteTarget, setDeleteTarget] = useState(null);
-
-  const fetchList = useCallback(async () => {
-    try {
-      const res = await fetch('/api/sessions');
-      const data = await res.json();
-      setSessions(data.sessions || []);
-    } catch {}
-  }, []);
-
-  useEffect(() => { fetchList(); }, [fetchList, refreshKey]);
 
   const handleDelete = (e, sid) => {
     e.stopPropagation();
@@ -28,9 +16,8 @@ export default function SessionList({ currentId, onSelect, onNew, refreshKey }) 
 
   const confirmDelete = async () => {
     if (deleteTarget) {
-      await deleteSession(deleteTarget);
+      await onDelete(deleteTarget);
       setDeleteTarget(null);
-      fetchList();
     }
   };
 

@@ -379,10 +379,45 @@ def _thread_config(session_id: str) -> dict:
 
 
 def get_session_state(session_id: str) -> AgentState | None:
-    """从 checkpointer 读取会话最新状态。"""
+    """从 checkpointer 读取会话最新状态（纯读取，不触发任何节点）。
+
+    实现原理
+    --------
+    LangGraph 的持久化模型是「线程(thread) → 检查点(checkpoint)」：
+    - 每次图执行或 update_state 后，checkpointer 都会为对应 thread_id
+      追加写入一条新 checkpoint（PostgresSaver 落在 checkpoints 表）；
+    - 本函数把 session_id 当作 thread_id 定位线程，取回最新一条
+      checkpoint 里保存的状态快照。
+
+    调用约定
+    --------
+    - 所有 REST 端点（get_session / upload_prd / chat 等）处理请求前
+      都先调用本函数确认会话存在、拿到当前状态；
+    - 返回 None 即视为「会话不存在」，API 层据此抛 404；
+    - 纯查询操作：不像 graph.invoke() 会让图继续执行节点，
+      也不会触发 interrupt 恢复，适合高频读场景。
+
+    返回值形态
+    ----------
+    - 成功：checkpoint.values —— 经 JSON 序列化/反序列化还原后的
+      AgentState 字典（features / check_items 等是普通 JSON 数据；
+      messages 可能是 LangChain 消息对象或 dict，两种形态的兼容处理
+      见 _build_session_response 的双分支）；
+    - 失败：None —— 两种可能：
+      1) 该 thread_id 从未写入过 checkpoint（会话未创建或已删除）；
+      2) checkpoint 存在但 values 为空（异常快照，防御性兜底）。
+
+    注：如需历史版本可改用 graph.get_state_history() 遍历旧 checkpoint，
+        本函数只关心「最新」状态。
+        get_state_history -- 取所有
+        get_state -- 取最新一条
+    """
     graph = get_graph()
+    # thread_id == session_id：会话与 LangGraph 线程一一对应
     config = _thread_config(session_id)
+    # get_state 按 checkpoint_id 倒序取最新一条快照，不执行图
     checkpoint = graph.get_state(config)
+    # get_state 找不到线程时返回 None；values 为空属防御性兜底
     if checkpoint is None or checkpoint.values is None:
         return None
     return checkpoint.values

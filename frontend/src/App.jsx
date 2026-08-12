@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useCallback } from 'react';
 import { useSession } from './hooks/useSession';
 import SessionList from './components/SessionList';
 import ChatPanel from './components/ChatPanel';
@@ -9,7 +9,6 @@ import ReportView from './components/ReportView';
 function App() {
   const session = useSession();
   const initialized = useRef(false);
-  const [refreshKey, setRefreshKey] = useState(0);
 
   useEffect(() => {
     if (!initialized.current) {
@@ -20,7 +19,6 @@ function App() {
 
   const handleNew = useCallback(() => {
     session.init();
-    setRefreshKey(k => k + 1);
   }, [session]);
 
   const handleSelect = useCallback((sid) => {
@@ -63,10 +61,11 @@ function App() {
       </header>
       <main className="app-main">
         <SessionList
+          sessions={session.sessions}
           currentId={session.sessionId}
           onSelect={handleSelect}
           onNew={handleNew}
-          refreshKey={refreshKey}
+          onDelete={session.deleteSession}
         />
         <ChatPanel
           messages={session.messages}

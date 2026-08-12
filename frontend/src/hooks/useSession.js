@@ -9,33 +9,8 @@ export function useSession() {
   const [checkResults, setCheckResults] = useState([]);
   const [report, setReport] = useState(null);
   const [messages, setMessages] = useState([]);
+  const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(false);
-
-  const init = useCallback(async () => {
-    setLoading(true);
-    try {
-      const data = await api.createSession();
-      setSessionId(data.session_id);
-      setPhase(data.current_phase);
-      setFeatures(data.features || []);
-      setCheckItems(data.check_items || []);
-      setMessages(data.messages || []);
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  const loadLatest = useCallback(async () => {
-    try {
-      const res = await fetch('/api/sessions');
-      const data = await res.json();
-      const list = data.sessions || [];
-      if (list.length > 0) {
-        const latest = list[0];
-        await load(latest.session_id);
-      }
-    } catch {}
-  }, []);
 
   const load = useCallback(async (sid) => {
     setLoading(true);
@@ -56,6 +31,45 @@ export function useSession() {
       setLoading(false);
     }
   }, []);
+
+  const refreshSessions = useCallback(async () => {
+    try {
+      const res = await fetch('/api/sessions');
+      const data = await res.json();
+      const list = data.sessions || [];
+      setSessions(list);
+      return list;
+    } catch {
+      return [];
+    }
+  }, []);
+
+  const init = useCallback(async () => {
+    setLoading(true);
+    try {
+      const data = await api.createSession();
+      setSessionId(data.session_id);
+      setPhase(data.current_phase);
+      setFeatures(data.features || []);
+      setCheckItems(data.check_items || []);
+      setMessages(data.messages || []);
+      await refreshSessions();
+    } finally {
+      setLoading(false);
+    }
+  }, [refreshSessions]);
+
+  const loadLatest = useCallback(async () => {
+    const list = await refreshSessions();
+    if (list.length > 0) {
+      await load(list[0].session_id);
+    }
+  }, [refreshSessions, load]);
+
+  const deleteSession = useCallback(async (sid) => {
+    await api.deleteSession(sid);
+    await refreshSessions();
+  }, [refreshSessions]);
 
   const uploadPrd = useCallback(async (file) => {
     if (!sessionId) return;
@@ -174,7 +188,7 @@ export function useSession() {
   }, [sessionId]);
 
   return {
-    sessionId, phase, features, checkItems, checkResults, report, messages, loading,
-    init, loadLatest, load, uploadPrd, generateSop, approveChecklist, updateItem, deleteItem, addItem, runChecks, sendMessage,
+    sessionId, phase, features, checkItems, checkResults, report, messages, sessions, loading,
+    init, loadLatest, load, uploadPrd, generateSop, approveChecklist, updateItem, deleteItem, addItem, runChecks, sendMessage, deleteSession,
   };
 }
