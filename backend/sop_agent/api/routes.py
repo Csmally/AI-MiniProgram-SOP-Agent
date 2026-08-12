@@ -6,6 +6,7 @@ from ..core.state import AgentState, create_initial_state, SessionPhase
 from ..core.orchestrator import (
     run_graph, resume_graph, update_state,
     save_new_session, get_session_state, list_sessions, delete_session,
+    _get_llm,
 )
 from ..sop.models import (
     SessionResponse,
@@ -240,8 +241,6 @@ async def chat(session_id: str, body: ChatRequest):
     if state is None:
         raise HTTPException(status_code=404, detail="会话不存在")
 
-    from ..core.orchestrator import _get_llm
-
     messages = state.get("messages", [])[-10:]
     history_lines = []
     for m in messages:
@@ -272,8 +271,6 @@ async def chat_stream(session_id: str, body: ChatRequest):
     state = get_session_state(session_id)
     if state is None:
         raise HTTPException(status_code=404, detail="会话不存在")
-
-    from ..core.orchestrator import _get_llm
 
     messages = state.get("messages", [])[-10:]
     history_lines = []

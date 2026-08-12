@@ -60,10 +60,10 @@ export default function ChatPanel({ messages, onSend, onUploadPrd, loading, phas
           <motion.div
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
-            className="message assistant"
+            className="message assistant orb-loading"
           >
             <div className="message-content">
-              <span className="typing-dots"><span>.</span><span>.</span><span>.</span></span>
+              <div className="siri-orb" />
             </div>
           </motion.div>
         )}

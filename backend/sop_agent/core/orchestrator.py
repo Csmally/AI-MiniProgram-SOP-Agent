@@ -59,6 +59,7 @@ def _handle_node_error(node_name: str, error: Exception) -> dict:
 
 def parse_prd(state: AgentState) -> dict:
     """解析 PRD 文档，提取功能列表。"""
+    print('parse_prd节点执行中....')
     prd_content = state.get("prd_content", "")
     if not prd_content:
         return {
@@ -120,6 +121,7 @@ PRD 内容：
 
 def generate_sop(state: AgentState) -> dict:
     """根据功能列表生成 SOP 检查清单。"""
+    print('generate_sop节点执行中....')
     features = state.get("features", [])
     if not features:
         return {
@@ -205,6 +207,7 @@ def review_list(state: AgentState) -> dict:
 
     图到达此节点时会暂停，等待前端发送 approve/reject 指令。
     """
+    print('review_list节点执行中....')
     approval = state.get("approval", "pending")
 
     if approval == "approved":
@@ -226,6 +229,7 @@ def review_list(state: AgentState) -> dict:
 
 def execute_checks(state: AgentState) -> dict:
     """执行检查 — 逐项执行 SOP 检查（当前为桩实现）。"""
+    print('execute_checks节点执行中....')
     check_items = state.get("check_items", [])
     if not check_items:
         return {
@@ -261,6 +265,7 @@ def execute_checks(state: AgentState) -> dict:
 
 def generate_report(state: AgentState) -> dict:
     """生成检查报告。"""
+    print('generate_report节点执行中....')
     check_items = state.get("check_items", [])
     check_results = state.get("check_results", [])
 
