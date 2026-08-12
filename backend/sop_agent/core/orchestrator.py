@@ -6,12 +6,15 @@
 """
 
 from typing import Literal
-from langgraph.graph import StateGraph, END
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import StateGraph, START, END
+from langgraph.graph.state import CompiledStateGraph
+from langgraph.checkpoint.postgres import PostgresSaver
 from langgraph.types import interrupt
 from langchain_openai import ChatOpenAI
+from langchain_core.messages import AIMessage
+from psycopg import connect
 
-from .state import AgentState, SessionPhase, session_store
+from .state import AgentState, SessionPhase
 from .config import get_settings
 
 
@@ -45,7 +48,7 @@ def _handle_node_error(node_name: str, error: Exception) -> dict:
     """统一处理节点中的异常，返回友好的错误信息。"""
     msg = f"❌ {node_name} 执行失败：{error}"
     return {
-        "messages": [{"role": "assistant", "content": msg}],
+        "messages": [AIMessage(content=msg)],
         "error": str(error),
     }
 
@@ -54,14 +57,13 @@ def _handle_node_error(node_name: str, error: Exception) -> dict:
 # 图节点
 # ──────────────────────────────────────────────
 
-async def parse_prd(state: AgentState) -> dict:
+def parse_prd(state: AgentState) -> dict:
     """解析 PRD 文档，提取功能列表。"""
     prd_content = state.get("prd_content", "")
     if not prd_content:
         return {
             "features": [],
             "current_phase": SessionPhase.PRD_UPLOADED.value,
-            "messages": [{"role": "assistant", "content": "未检测到 PRD 内容，请先上传 PRD 文档。"}],
             "error": "PRD 内容为空",
         }
 
@@ -87,7 +89,7 @@ PRD 内容：
 """
 
     try:
-        response = await llm.ainvoke(prompt)
+        response = llm.invoke(prompt)
         content = response.content.strip()
 
         # 尝试解析 JSON
@@ -109,21 +111,20 @@ PRD 内容：
         return {
             "features": features,
             "current_phase": SessionPhase.PRD_UPLOADED.value,
-            "messages": [{"role": "assistant", "content": msg}],
+            "messages": [AIMessage(content=msg)],
             "error": None,
         }
     except Exception as e:
         return _handle_node_error("PRD 解析", e)
 
 
-async def generate_sop(state: AgentState) -> dict:
+def generate_sop(state: AgentState) -> dict:
     """根据功能列表生成 SOP 检查清单。"""
     features = state.get("features", [])
     if not features:
         return {
             "check_items": [],
             "current_phase": SessionPhase.PRD_UPLOADED.value,
-            "messages": [{"role": "assistant", "content": "没有功能信息，无法生成检查清单。请先上传 PRD。"}],
         }
 
     llm = _get_llm("generate_sop")
@@ -150,7 +151,7 @@ async def generate_sop(state: AgentState) -> dict:
 {features_json}
 """
 
-    response = await llm.ainvoke(prompt)
+    response = llm.invoke(prompt)
     content = response.content.strip()
 
     check_items = []
@@ -195,7 +196,7 @@ async def generate_sop(state: AgentState) -> dict:
         "check_items": check_items,
         "current_phase": SessionPhase.SOP_GENERATED.value,
         "approval": "pending",
-        "messages": [{"role": "assistant", "content": msg}],
+        "messages": [AIMessage(content=msg)],
     }
 
 
@@ -209,13 +210,13 @@ def review_list(state: AgentState) -> dict:
     if approval == "approved":
         return {
             "current_phase": SessionPhase.READY.value,
-            "messages": [{"role": "assistant", "content": "审核通过！准备开始执行检查。"}],
+            "messages": [AIMessage(content="审核通过！准备开始执行检查。")],
         }
     elif approval == "rejected":
         return {
             "current_phase": SessionPhase.PRD_UPLOADED.value,
             "approval": "pending",
-            "messages": [{"role": "assistant", "content": "已拒绝，请修改检查清单后重新生成。"}],
+            "messages": [AIMessage(content="已拒绝，请修改检查清单后重新生成。")],
         }
     else:
         # pending 状态 — 使用 interrupt 等待用户操作
@@ -223,14 +224,14 @@ def review_list(state: AgentState) -> dict:
         return {}
 
 
-async def execute_checks(state: AgentState) -> dict:
+def execute_checks(state: AgentState) -> dict:
     """执行检查 — 逐项执行 SOP 检查（当前为桩实现）。"""
     check_items = state.get("check_items", [])
     if not check_items:
         return {
             "current_phase": SessionPhase.COMPLETED.value,
             "check_results": [],
-            "messages": [{"role": "assistant", "content": "没有检查项需要执行。"}],
+            "messages": [AIMessage(content="没有检查项需要执行。")],
         }
 
     # Phase 4 将集成 minium Tool，当前为桩实现
@@ -254,11 +255,11 @@ async def execute_checks(state: AgentState) -> dict:
     return {
         "check_results": results,
         "current_phase": SessionPhase.RUNNING.value,
-        "messages": [{"role": "assistant", "content": msg}],
+        "messages": [AIMessage(content=msg)],
     }
 
 
-async def generate_report(state: AgentState) -> dict:
+def generate_report(state: AgentState) -> dict:
     """生成检查报告。"""
     check_items = state.get("check_items", [])
     check_results = state.get("check_results", [])
@@ -283,13 +284,13 @@ async def generate_report(state: AgentState) -> dict:
 {summary_data[:6000]}
 """
 
-    response = await llm.ainvoke(prompt)
+    response = llm.invoke(prompt)
     report_content = response.content.strip()
 
     return {
         "report_content": report_content,
         "current_phase": SessionPhase.COMPLETED.value,
-        "messages": [{"role": "assistant", "content": "报告已生成！请在右侧面板查看。"}],
+        "messages": [AIMessage(content="报告已生成！请在右侧面板查看。")],
     }
 
 
@@ -316,52 +317,45 @@ def _after_checks(state: AgentState) -> Literal["generate_report", END]:
 # 图构建
 # ──────────────────────────────────────────────
 
-def build_graph() -> StateGraph:
-    """构建并编译 LangGraph 状态图。"""
+def build_graph() -> CompiledStateGraph:
+    """构建并编译 LangGraph 状态图（PostgreSQL checkpointer）。"""
     workflow = StateGraph(AgentState)
 
-    # 添加节点
     workflow.add_node("parse_prd", parse_prd)
     workflow.add_node("generate_sop", generate_sop)
     workflow.add_node("review_list", review_list)
     workflow.add_node("execute_checks", execute_checks)
     workflow.add_node("generate_report", generate_report)
 
-    # 设置入口
-    workflow.set_entry_point("parse_prd")
-
-    # 边
+    workflow.add_edge(START, "parse_prd")
     workflow.add_edge("parse_prd", "generate_sop")
     workflow.add_edge("generate_sop", "review_list")
 
-    # 审核后的条件边
     workflow.add_conditional_edges(
         "review_list",
         _after_review,
-        {
-            "generate_sop": "generate_sop",
-            "execute_checks": "execute_checks",
-        },
+        {"generate_sop": "generate_sop", "execute_checks": "execute_checks"},
     )
 
     workflow.add_edge("execute_checks", "generate_report")
     workflow.add_edge("generate_report", END)
 
-    # 编译，配置审核节点前中断
-    memory = MemorySaver()
-    compiled = workflow.compile(
-        checkpointer=memory,
+    db_url = get_settings().DATABASE_URL
+    conn = connect(db_url, autocommit=True, prepare_threshold=0)
+    saver = PostgresSaver(conn)
+    saver.setup()
+
+    return workflow.compile(
+        checkpointer=saver,
         interrupt_before=["review_list"],
     )
 
-    return compiled
-
 
 # 全局图实例
-_graph: StateGraph | None = None
+_graph: CompiledStateGraph | None = None
 
 
-def get_graph() -> StateGraph:
+def get_graph() -> CompiledStateGraph:
     """获取（或懒加载创建）编译后的图。"""
     global _graph
     if _graph is None:
@@ -370,54 +364,83 @@ def get_graph() -> StateGraph:
 
 
 # ──────────────────────────────────────────────
-# 对外调用接口
+# 对外调用接口 — 全部通过 checkpointer
 # ──────────────────────────────────────────────
 
-async def run_graph(session_id: str) -> AgentState:
-    """运行（或继续运行）指定会话的图。"""
+def save_new_session(state: AgentState) -> None:
+    """保存新会话初始状态到 checkpointer。"""
     graph = get_graph()
-    state = session_store.get(session_id)
-    thread_config = session_store.get_thread_config(session_id)
-
-    if state is None:
-        raise ValueError(f"会话 {session_id} 不存在")
-
-    # 执行图
-    result = await graph.ainvoke(state, thread_config)
-
-    # 更新存储
-    session_store.update(session_id, result)
-
-    return result
+    config = _thread_config(state["session_id"])
+    graph.invoke(state, config)
 
 
-async def resume_graph(session_id: str, approval: Literal["approved", "rejected"]) -> AgentState:
-    """从审核中断点恢复图执行。"""
+def _thread_config(session_id: str) -> dict:
+    return {"configurable": {"thread_id": session_id}}
+
+
+def get_session_state(session_id: str) -> AgentState | None:
+    """从 checkpointer 读取会话最新状态。"""
     graph = get_graph()
-    state = session_store.get(session_id)
-    thread_config = session_store.get_thread_config(session_id)
+    config = _thread_config(session_id)
+    checkpoint = graph.get_state(config)
+    if checkpoint is None or checkpoint.values is None:
+        return None
+    return checkpoint.values
 
-    if state is None:
-        raise ValueError(f"会话 {session_id} 不存在")
 
-    # 更新审批状态
+def run_graph(session_id: str, state: AgentState) -> AgentState:
+    """运行图。"""
+    graph = get_graph()
+    return graph.invoke(state, _thread_config(session_id))
+
+
+def resume_graph(session_id: str, state: AgentState, approval: Literal["approved", "rejected"]) -> AgentState:
+    """从审核中断点恢复。"""
+    graph = get_graph()
     state["approval"] = approval
+    return graph.invoke(state, _thread_config(session_id))
 
-    # 恢复执行
-    result = await graph.ainvoke(state, thread_config)
 
-    # 更新存储
-    session_store.update(session_id, result)
+def update_state(session_id: str, state: AgentState, updates: dict) -> AgentState:
+    """更新状态并持久化到 checkpointer（不触发节点执行）。"""
+    state.update(updates)
+    graph = get_graph()
+    config = _thread_config(session_id)
+    graph.update_state(config, updates)
+    result = graph.get_state(config)
+    return result.values if result else state
 
+
+def list_sessions() -> list[dict]:
+    """列出所有会话（从 checkpointer 数据库）。"""
+    graph = get_graph()
+    saver = graph.checkpointer
+    conn = saver.conn
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT thread_id FROM checkpoints ORDER BY thread_id DESC LIMIT 100"
+        )
+        rows = cur.fetchall()
+    result = []
+    for row in rows:
+        tid = row[0]
+        state = get_session_state(tid) if hasattr(row, '__getitem__') else get_session_state(row)
+        if state:
+            result.append({
+                "session_id": tid,
+                "current_phase": state.get("current_phase", "idle"),
+                "features_count": len(state.get("features", [])),
+                "check_items_count": len(state.get("check_items", [])),
+            })
     return result
 
 
-def update_state(session_id: str, updates: dict) -> AgentState:
-    """直接更新会话状态（用于前端编辑检查项等）。"""
-    state = session_store.get(session_id)
-    if state is None:
-        raise ValueError(f"会话 {session_id} 不存在")
-
-    state.update(updates)
-    session_store.update(session_id, state)
-    return state
+def delete_session(session_id: str) -> bool:
+    """删除会话的 checkpoint 数据。"""
+    graph = get_graph()
+    saver = graph.checkpointer
+    try:
+        saver.delete_thread(session_id)
+        return True
+    except Exception:
+        return False

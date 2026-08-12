@@ -1,0 +1,38 @@
+[
+  {
+    "name": "个人信息展示",
+    "description": "展示用户头像、昵称、手机号",
+    "affected_pages": [
+      "pages/profile/index"
+    ],
+    "api_endpoints": [
+      "GET /api/user/profile"
+    ],
+    "ui_elements": [
+      "用户头像",
+      "用户昵称",
+      "用户手机号"
+    ],
+    "acceptance_criteria": [
+      "头像正确加载显示"
+    ]
+  },
+  {
+    "name": "修改昵称",
+    "description": "提供输入框修改昵称，点击保存按钮提交更新",
+    "affected_pages": [
+      "pages/profile/edit"
+    ],
+    "api_endpoints": [
+      "PUT /api/user/profile"
+    ],
+    "ui_elements": [
+      "昵称输入框",
+      "保存按钮"
+    ],
+    "acceptance_criteria": [
+      "昵称修改后实时更新",
+      "保存按钮点击后有成功提示"
+    ]
+  }
+]

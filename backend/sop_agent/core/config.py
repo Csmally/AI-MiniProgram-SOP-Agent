@@ -65,6 +65,10 @@ class Settings:
         "SESSIONS_DIR",
         str(Path(__file__).resolve().parent.parent.parent.parent / "sessions"),
     )
+    DATABASE_URL: str = _env(
+        "DATABASE_URL",
+        "postgresql://postgres:postgres@127.0.0.1:5432/sop_agent",
+    )
 
     def get_llm_config(self, model_key: str) -> dict:
         """根据 model_key 获取 {model, base_url, api_key}。

@@ -66,12 +66,14 @@ class CreateCheckItemRequest(BaseModel):
 # -----------------------------
 
 class SessionResponse(BaseModel):
-    """会话信息响应。"""
+    """会话信息响应（完整状态，前端可恢复）。"""
     session_id: str
     current_phase: str
-    features_count: int
-    check_items_count: int
-    messages: list[dict]
+    features: list[dict] = []
+    check_items: list[dict] = []
+    check_results: list[dict] = []
+    report_content: str = ""
+    messages: list[dict] = []
 
 
 class ParseResultResponse(BaseModel):

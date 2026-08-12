@@ -1,8 +1,12 @@
 """REST API 路由定义。"""
 
 from fastapi import APIRouter, UploadFile, File, HTTPException
-from ..core.state import session_store, SessionPhase
-from ..core.orchestrator import run_graph, resume_graph, update_state
+from fastapi.responses import StreamingResponse
+from ..core.state import AgentState, create_initial_state, SessionPhase
+from ..core.orchestrator import (
+    run_graph, resume_graph, update_state,
+    save_new_session, get_session_state, list_sessions, delete_session,
+)
 from ..sop.models import (
     SessionResponse,
     ParseResultResponse,
@@ -24,30 +28,52 @@ router = APIRouter(prefix="/api")
 
 @router.post("/sessions", response_model=SessionResponse)
 async def create_session():
-    """创建新的检查会话。"""
-    state = session_store.create()
-    return SessionResponse(
-        session_id=state["session_id"],
-        current_phase=state["current_phase"],
-        features_count=0,
-        check_items_count=0,
-        messages=state["messages"],
-    )
+    state = create_initial_state()
+    save_new_session(state)
+    return _build_session_response(state)
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
 async def get_session(session_id: str):
-    """获取会话状态。"""
-    state = session_store.get(session_id)
+    state = get_session_state(session_id)
     if state is None:
         raise HTTPException(status_code=404, detail="会话不存在")
+    return _build_session_response(state)
+
+
+@router.delete("/sessions/{session_id}")
+async def del_session(session_id: str):
+    if not delete_session(session_id):
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return {"message": "删除成功", "session_id": session_id}
+
+
+@router.get("/sessions")
+async def get_sessions():
+    sessions = list_sessions()
+    return {"sessions": sessions, "total": len(sessions)}
+
+
+def _build_session_response(state: dict) -> SessionResponse:
+    msgs = []
+    for m in state.get("messages", []):
+        if hasattr(m, "type") and hasattr(m, "content"):
+            role = "user" if m.type == "human" else "assistant"
+            msgs.append({"role": role, "content": m.content})
+        elif isinstance(m, dict):
+            role = m.get("role", "assistant")
+            if role == "ai": role = "assistant"
+            if role == "human": role = "user"
+            msgs.append({"role": role, "content": m.get("content", "")})
 
     return SessionResponse(
-        session_id=state["session_id"],
-        current_phase=state["current_phase"],
-        features_count=len(state.get("features", [])),
-        check_items_count=len(state.get("check_items", [])),
-        messages=state.get("messages", []),
+        session_id=state.get("session_id", ""),
+        current_phase=state.get("current_phase", "idle"),
+        features=state.get("features", []),
+        check_items=state.get("check_items", []),
+        check_results=state.get("check_results", []),
+        report_content=state.get("report_content", ""),
+        messages=msgs,
     )
 
 
@@ -57,28 +83,16 @@ async def get_session(session_id: str):
 
 @router.post("/sessions/{session_id}/prd", response_model=ParseResultResponse)
 async def upload_prd(session_id: str, file: UploadFile = File(...)):
-    """上传 PRD 文件并触发解析。"""
-    state = session_store.get(session_id)
+    state = get_session_state(session_id)
     if state is None:
         raise HTTPException(status_code=404, detail="会话不存在")
 
-    # 读取文件内容
     content = await file.read()
-    prd_text = content.decode("utf-8")
-
-    # 更新状态
-    state["prd_content"] = prd_text
-    session_store.update(session_id, state)
-
-    # 运行图
-    result = await run_graph(session_id)
+    state["prd_content"] = content.decode("utf-8")
+    result = run_graph(session_id, state)
 
     if result.get("error"):
-        return ParseResultResponse(
-            session_id=session_id,
-            features=[],
-            message=f"解析失败：{result['error']}",
-        )
+        return ParseResultResponse(session_id=session_id, features=[], message=f"解析失败：{result['error']}")
 
     return ParseResultResponse(
         session_id=session_id,
@@ -93,14 +107,11 @@ async def upload_prd(session_id: str, file: UploadFile = File(...)):
 
 @router.post("/sessions/{session_id}/generate", response_model=ChecklistResponse)
 async def generate_checklist(session_id: str):
-    """从当前审核点恢复，进入生成（重新生成清单）。"""
-    state = session_store.get(session_id)
+    state = get_session_state(session_id)
     if state is None:
         raise HTTPException(status_code=404, detail="会话不存在")
 
-    # 如果当前在审核阶段且被拒绝，重新运行
-    result = await resume_graph(session_id, "rejected")
-
+    result = resume_graph(session_id, state, "rejected")
     return ChecklistResponse(
         session_id=session_id,
         check_items=result.get("check_items", []),
@@ -110,16 +121,12 @@ async def generate_checklist(session_id: str):
 
 @router.post("/sessions/{session_id}/approve", response_model=SessionResponse)
 async def approve_checklist(session_id: str):
-    """用户确认检查清单，继续执行。"""
-    result = await resume_graph(session_id, "approved")
+    state = get_session_state(session_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
 
-    return SessionResponse(
-        session_id=session_id,
-        current_phase=result["current_phase"],
-        features_count=len(result.get("features", [])),
-        check_items_count=len(result.get("check_items", [])),
-        messages=result.get("messages", []),
-    )
+    result = resume_graph(session_id, state, "approved")
+    return _build_session_response(result)
 
 
 # ──────────────────────────────────────────────
@@ -128,11 +135,9 @@ async def approve_checklist(session_id: str):
 
 @router.get("/sessions/{session_id}/check-items", response_model=ChecklistResponse)
 async def get_check_items(session_id: str):
-    """获取检查项列表。"""
-    state = session_store.get(session_id)
+    state = get_session_state(session_id)
     if state is None:
         raise HTTPException(status_code=404, detail="会话不存在")
-
     return ChecklistResponse(
         session_id=session_id,
         check_items=state.get("check_items", []),
@@ -142,55 +147,37 @@ async def get_check_items(session_id: str):
 
 @router.put("/sessions/{session_id}/check-items/{item_id}")
 async def update_check_item(session_id: str, item_id: str, body: UpdateCheckItemRequest):
-    """修改检查项。"""
-    state = session_store.get(session_id)
+    state = get_session_state(session_id)
     if state is None:
         raise HTTPException(status_code=404, detail="会话不存在")
 
     items = state.get("check_items", [])
-    updated = False
     for item in items:
         if item.get("id") == item_id:
-            if body.description is not None:
-                item["description"] = body.description
-            if body.priority is not None:
-                item["priority"] = body.priority
-            if body.check_steps is not None:
-                item["check_steps"] = body.check_steps
-            if body.expected_result is not None:
-                item["expected_result"] = body.expected_result
-            updated = True
+            if body.description is not None: item["description"] = body.description
+            if body.priority is not None: item["priority"] = body.priority
+            if body.check_steps is not None: item["check_steps"] = body.check_steps
+            if body.expected_result is not None: item["expected_result"] = body.expected_result
             break
-
-    if not updated:
-        raise HTTPException(status_code=404, detail="检查项不存在")
-
-    update_state(session_id, {"check_items": items})
+    update_state(session_id, state, {"check_items": items})
     return {"message": "更新成功", "item_id": item_id}
 
 
 @router.delete("/sessions/{session_id}/check-items/{item_id}")
-async def delete_check_item(session_id: str, item_id: str):
-    """删除检查项。"""
-    state = session_store.get(session_id)
+async def del_check_item(session_id: str, item_id: str):
+    state = get_session_state(session_id)
     if state is None:
         raise HTTPException(status_code=404, detail="会话不存在")
-
-    items = state.get("check_items", [])
-    items = [item for item in items if item.get("id") != item_id]
-    update_state(session_id, {"check_items": items})
+    items = [i for i in state.get("check_items", []) if i.get("id") != item_id]
+    update_state(session_id, state, {"check_items": items})
     return {"message": "删除成功", "item_id": item_id}
 
 
 @router.post("/sessions/{session_id}/check-items")
-async def create_check_item(session_id: str, body: CreateCheckItemRequest):
-    """手动新增检查项。"""
-    state = session_store.get(session_id)
+async def add_check_item(session_id: str, body: CreateCheckItemRequest):
+    state = get_session_state(session_id)
     if state is None:
         raise HTTPException(status_code=404, detail="会话不存在")
-
-    import uuid
-
     new_item = {
         "id": uuid.uuid4().hex[:8],
         "category": body.category,
@@ -198,13 +185,10 @@ async def create_check_item(session_id: str, body: CreateCheckItemRequest):
         "priority": body.priority,
         "check_steps": body.check_steps,
         "expected_result": body.expected_result,
-        "status": "pending",
-        "screenshots": [],
-        "result_detail": None,
+        "status": "pending", "screenshots": [], "result_detail": None,
     }
-    items = state.get("check_items", [])
-    items.append(new_item)
-    update_state(session_id, {"check_items": items})
+    items = state.get("check_items", []) + [new_item]
+    update_state(session_id, state, {"check_items": items})
     return {"message": "新增成功", "item": new_item}
 
 
@@ -214,13 +198,10 @@ async def create_check_item(session_id: str, body: CreateCheckItemRequest):
 
 @router.post("/sessions/{session_id}/run", response_model=RunResponse)
 async def run_checks(session_id: str):
-    """开始执行检查。"""
-    state = session_store.get(session_id)
+    state = get_session_state(session_id)
     if state is None:
         raise HTTPException(status_code=404, detail="会话不存在")
-
-    result = await run_graph(session_id)
-
+    result = run_graph(session_id, state)
     return RunResponse(
         session_id=session_id,
         message="检查执行完成",
@@ -234,25 +215,18 @@ async def run_checks(session_id: str):
 
 @router.get("/sessions/{session_id}/report", response_model=ReportResponse)
 async def get_report(session_id: str):
-    """获取检查报告。"""
-    state = session_store.get(session_id)
+    state = get_session_state(session_id)
     if state is None:
         raise HTTPException(status_code=404, detail="会话不存在")
-
-    check_results = state.get("check_results", [])
-    total = len(check_results)
-    passed = sum(1 for r in check_results if r.get("status") == "passed")
-    failed = sum(1 for r in check_results if r.get("status") == "failed")
-
+    results = state.get("check_results", [])
+    total = len(results)
+    passed = sum(1 for r in results if r.get("status") == "passed")
+    failed = sum(1 for r in results if r.get("status") == "failed")
     return ReportResponse(
         session_id=session_id,
         report_content=state.get("report_content", ""),
-        summary={
-            "total": total,
-            "passed": passed,
-            "failed": failed,
-            "pass_rate": f"{passed/total*100:.0f}%" if total > 0 else "N/A",
-        },
+        summary={"total": total, "passed": passed, "failed": failed,
+                  "pass_rate": f"{passed/total*100:.0f}%" if total > 0 else "N/A"},
     )
 
 
@@ -262,33 +236,76 @@ async def get_report(session_id: str):
 
 @router.post("/sessions/{session_id}/chat", response_model=ChatResponse)
 async def chat(session_id: str, body: ChatRequest):
-    """与 AI 模型对话。"""
-    state = session_store.get(session_id)
+    state = get_session_state(session_id)
     if state is None:
         raise HTTPException(status_code=404, detail="会话不存在")
 
     from ..core.orchestrator import _get_llm
 
-    # 构建对话上下文
-    messages = state.get("messages", [])[-10:]  # 最近 10 条
-    history = "\n".join(
-        f"{'用户' if m['role']=='user' else '助手'}: {m['content'][:200]}"
-        for m in messages
-    )
+    messages = state.get("messages", [])[-10:]
+    history_lines = []
+    for m in messages:
+        role = m.get("role") if isinstance(m, dict) else getattr(m, "type", "unknown")
+        content = m.get("content", "") if isinstance(m, dict) else getattr(m, "content", "")
+        history_lines.append(f"{'用户' if role in ('human','user') else '助手'}: {content[:200]}")
+    history = "\n".join(history_lines)
 
     llm = _get_llm("chat")
     prompt = (
-        f"你是一个微信小程序 SOP 检查助手。当前会话正在处理 PRD 文档。\n\n"
+        f"你是一个微信小程序 SOP 检查助手。\n\n"
         f"对话历史：\n{history}\n\n"
-        f"用户提问：{body.message}\n\n"
-        f"请简洁回答，帮助用户完成 SOP 检查。"
+        f"用户提问：{body.message}\n\n请简洁回答。"
     )
-    response = await llm.ainvoke(prompt)
+    response = llm.invoke(prompt)
     reply = response.content.strip()
 
-    # 保存对话
-    messages.append({"role": "user", "content": body.message})
-    messages.append({"role": "assistant", "content": reply})
-    update_state(session_id, {"messages": messages})
+    messages = list(messages)
+    messages.append(HumanMessage(content=body.message))
+    messages.append(AIMessage(content=reply))
+    update_state(session_id, state, {"messages": messages})
 
     return ChatResponse(reply=reply, session_id=session_id)
+
+
+@router.post("/sessions/{session_id}/chat/stream")
+async def chat_stream(session_id: str, body: ChatRequest):
+    state = get_session_state(session_id)
+    if state is None:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    from ..core.orchestrator import _get_llm
+
+    messages = state.get("messages", [])[-10:]
+    history_lines = []
+    for m in messages:
+        role = m.get("role") if isinstance(m, dict) else getattr(m, "type", "unknown")
+        content = m.get("content", "") if isinstance(m, dict) else getattr(m, "content", "")
+        history_lines.append(f"{'用户' if role in ('human','user') else '助手'}: {content[:200]}")
+    history = "\n".join(history_lines)
+
+    llm = _get_llm("chat")
+    prompt = (
+        f"你是一个微信小程序 SOP 检查助手。\n\n"
+        f"对话历史：\n{history}\n\n"
+        f"用户提问：{body.message}\n\n请简洁回答。"
+    )
+
+    async def generate():
+        full_reply = ""
+        async for chunk in llm.astream(prompt):
+            token = chunk.content if hasattr(chunk, 'content') else str(chunk)
+            if token:
+                full_reply += token
+                yield f"data: {token}\n\n"
+
+        messages = list(state.get("messages", []))
+        messages.append(HumanMessage(content=body.message))
+        messages.append(AIMessage(content=full_reply))
+        update_state(session_id, state, {"messages": messages})
+        yield "data: [DONE]\n\n"
+
+    return StreamingResponse(generate(), media_type="text/event-stream")
+
+
+import uuid
+from langchain_core.messages import HumanMessage, AIMessage

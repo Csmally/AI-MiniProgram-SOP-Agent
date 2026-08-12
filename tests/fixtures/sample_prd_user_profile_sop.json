@@ -1,0 +1,158 @@
+[
+  {
+    "id": "check-001",
+    "category": "ui",
+    "description": "个人信息展示 - 头像加载显示",
+    "priority": "high",
+    "check_steps": [
+      "进入个人中心页面（pages/profile/index）",
+      "等待页面数据和图片资源完全加载",
+      "观察用户头像区域"
+    ],
+    "expected_result": "用户头像正确加载显示，无裂图、无持续加载占位图，图片清晰且为当前用户头像",
+    "status": "pending",
+    "screenshots": [],
+    "result_detail": null
+  },
+  {
+    "id": "check-002",
+    "category": "ui",
+    "description": "个人信息展示 - 昵称文本显示",
+    "priority": "high",
+    "check_steps": [
+      "进入个人中心页面",
+      "等待页面加载完成",
+      "查看昵称显示区域"
+    ],
+    "expected_result": "昵称文本正确显示，与当前用户的昵称一致，无乱码、未显示默认占位文本",
+    "status": "pending",
+    "screenshots": [],
+    "result_detail": null
+  },
+  {
+    "id": "check-003",
+    "category": "ui",
+    "description": "个人信息展示 - 手机号文本显示",
+    "priority": "high",
+    "check_steps": [
+      "进入个人中心页面",
+      "等待页面加载完成",
+      "查看手机号显示区域"
+    ],
+    "expected_result": "手机号文本正确显示，格式符合脱敏规范（如138****1234），与当前用户绑定手机号一致",
+    "status": "pending",
+    "screenshots": [],
+    "result_detail": null
+  },
+  {
+    "id": "check-004",
+    "category": "api",
+    "description": "GET /api/user/profile 接口响应验证",
+    "priority": "critical",
+    "check_steps": [
+      "使用合法用户凭证调用 GET /api/user/profile",
+      "检查HTTP状态码",
+      "检查响应体JSON结构及字段",
+      "验证头像URL可访问性"
+    ],
+    "expected_result": "返回200 OK，响应体包含avatar（头像URL）、nickname（昵称）、mobile（手机号）字段；avatar字段为有效资源URL（非404），nickname和mobile为非空字符串",
+    "status": "pending",
+    "screenshots": [],
+    "result_detail": null
+  },
+  {
+    "id": "check-005",
+    "category": "ui",
+    "description": "修改昵称 - 昵称输入框可编辑",
+    "priority": "high",
+    "check_steps": [
+      "进入修改昵称页面（pages/profile/edit）",
+      "点击昵称输入框",
+      "使用键盘输入新昵称内容",
+      "清除输入框内容并重新输入"
+    ],
+    "expected_result": "输入框正常获取焦点并可进行文本输入、删除、修改，显示当前输入内容，无输入限制卡死或无法调起键盘",
+    "status": "pending",
+    "screenshots": [],
+    "result_detail": null
+  },
+  {
+    "id": "check-006",
+    "category": "ui",
+    "description": "修改昵称 - 点击保存按钮触发保存",
+    "priority": "high",
+    "check_steps": [
+      "在修改昵称页输入合法的新昵称",
+      "点击「保存」按钮",
+      "观察按钮状态变化（如显示loading/置灰）",
+      "等待操作完成"
+    ],
+    "expected_result": "点击保存后按钮进入不可重复点击状态（如loading），随后页面反馈操作结果（成功或失败），按钮恢复正常状态",
+    "status": "pending",
+    "screenshots": [],
+    "result_detail": null
+  },
+  {
+    "id": "check-007",
+    "category": "ui",
+    "description": "修改昵称 - 保存成功提示",
+    "priority": "medium",
+    "check_steps": [
+      "在修改昵称页输入合法且与原昵称不同的新昵称",
+      "点击「保存」按钮",
+      "等待接口返回成功",
+      "观察页面提示"
+    ],
+    "expected_result": "页面出现明确的成功提示（如Toast“保存成功”或弹窗），且提示信息显示正确，自动消失或可手动关闭",
+    "status": "pending",
+    "screenshots": [],
+    "result_detail": null
+  },
+  {
+    "id": "check-008",
+    "category": "ui",
+    "description": "修改昵称 - 修改后个人信息页昵称实时更新",
+    "priority": "high",
+    "check_steps": [
+      "在修改昵称页将昵称改为新值并保存成功",
+      "返回个人中心页面（pages/profile/index）",
+      "观察昵称显示区域",
+      "再次进入修改昵称页查看输入框默认值"
+    ],
+    "expected_result": "个人中心页昵称显示为刚刚修改的新昵称；再次进入修改页时输入框默认显示新昵称，全链路数据一致",
+    "status": "pending",
+    "screenshots": [],
+    "result_detail": null
+  },
+  {
+    "id": "check-009",
+    "category": "api",
+    "description": "PUT /api/user/profile 修改昵称成功响应",
+    "priority": "critical",
+    "check_steps": [
+      "使用合法用户凭证调用 PUT /api/user/profile，请求体包含合法的新昵称字段",
+      "检查HTTP状态码",
+      "检查响应体中返回的昵称字段"
+    ],
+    "expected_result": "返回200 OK，响应体包含更新后的user对象，其中nickname字段值等于请求中的新昵称，avatar、mobile等其他字段保持不变",
+    "status": "pending",
+    "screenshots": [],
+    "result_detail": null
+  },
+  {
+    "id": "check-010",
+    "category": "api",
+    "description": "PUT /api/user/profile 异常输入处理",
+    "priority": "high",
+    "check_steps": [
+      "发送PUT请求，请求体昵称字段为空字符串",
+      "发送PUT请求，请求体昵称字段为超长字符串（如超过20个字符，视业务规则）",
+      "发送PUT请求，请求体不全或格式错误",
+      "检查HTTP状态码和错误响应结构"
+    ],
+    "expected_result": "接口返回400或422等客户端错误状态码，响应体包含具体错误码和错误信息（如“昵称不能为空”、“昵称长度超过限制”），不执行实际数据修改",
+    "status": "pending",
+    "screenshots": [],
+    "result_detail": null
+  }
+]
