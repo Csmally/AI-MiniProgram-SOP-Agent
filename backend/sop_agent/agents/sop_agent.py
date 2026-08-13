@@ -1,25 +1,23 @@
 """SOP 生成 Agent — 根据功能列表生成 UI/API 检查清单。"""
 
-from typing import Annotated, Optional, TypedDict
+from typing import Optional
 
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.graph.message import add_messages
 from langchain_core.messages import AIMessage
 
 from ..core.llm import get_llm
 from ..core.state import SessionPhase
 
 
-class SOPAgentState(TypedDict):
-    """SOP 生成 Agent 的状态（主图状态子集）。"""
+class SOPAgentState(MessagesState):
+    """SOP 生成 Agent 的状态（主图状态子集 + messages）。"""
 
     features: list[dict]
     check_items: list[dict]
     current_phase: str
     approval: str
     error: Optional[str]
-    messages: Annotated[list, add_messages]
 
 
 def generate_sop(state: SOPAgentState) -> dict:

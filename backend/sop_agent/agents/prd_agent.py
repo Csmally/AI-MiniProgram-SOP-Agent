@@ -1,24 +1,22 @@
 """PRD 解析 Agent — 解析需求文档，提取功能列表。"""
 
-from typing import Annotated, Optional, TypedDict
+from typing import Optional
 
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.graph.message import add_messages
 from langchain_core.messages import AIMessage
 
 from ..core.llm import get_llm
 from ..core.state import SessionPhase
 
 
-class PRDAgentState(TypedDict):
-    """PRD 解析 Agent 的状态（主图状态子集）。"""
+class PRDAgentState(MessagesState):
+    """PRD 解析 Agent 的状态（主图状态子集 + messages）。"""
 
     prd_content: str
     features: list[dict]
     current_phase: str
     error: Optional[str]
-    messages: Annotated[list, add_messages]
 
 
 def parse_prd(state: PRDAgentState) -> dict:

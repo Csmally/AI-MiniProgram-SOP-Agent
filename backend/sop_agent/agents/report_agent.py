@@ -1,24 +1,20 @@
 """报告生成 Agent — 汇总检查结果，生成 Markdown 报告。"""
 
-from typing import Annotated, TypedDict
-
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.graph.message import add_messages
 from langchain_core.messages import AIMessage
 
 from ..core.llm import get_llm
 from ..core.state import SessionPhase
 
 
-class ReportAgentState(TypedDict):
-    """报告生成 Agent 的状态（主图状态子集）。"""
+class ReportAgentState(MessagesState):
+    """报告生成 Agent 的状态（主图状态子集 + messages）。"""
 
     check_items: list[dict]
     check_results: list[dict]
     report_content: str
     current_phase: str
-    messages: Annotated[list, add_messages]
 
 
 def generate_report(state: ReportAgentState) -> dict:

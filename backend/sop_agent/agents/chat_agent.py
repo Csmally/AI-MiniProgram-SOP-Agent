@@ -7,20 +7,17 @@
 """
 
 import threading
-from typing import Annotated, Callable, Optional, TypedDict
+from typing import Callable, Optional
 
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.graph.message import add_messages
 from langchain_core.messages import AIMessage
 
 from ..core.llm import get_llm
 
 
-class ChatAgentState(TypedDict):
-    """对话 Agent 的状态 — 只声明 messages，其余通道不回写。"""
-
-    messages: Annotated[list, add_messages]
+class ChatAgentState(MessagesState):
+    """对话 Agent 的状态 — 只继承 messages（add_messages reducer），其余通道不回写。"""
 
 
 # ──────────────────────────────────────────────
