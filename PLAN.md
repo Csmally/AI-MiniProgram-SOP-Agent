@@ -162,6 +162,7 @@ ai-miniprogram-sop-agent/
 | 状态定义 | MainGraphState + 子集 schema | `add_messages` / `operator.add` reducer；子图共享通道声明 LastValue 只回本项贡献 |
 | 持久化 | LangGraph PostgresSaver + psycopg_pool | ConnectionPool 线程安全（SSE worker 线程共享） |
 | 图执行 | 同步 `graph.invoke()/stream()` | 节点改同步（`llm.invoke()`），避免 Windows 事件循环问题；SSE 时图在 worker 线程跑 |
+| REST 并发 | 非 SSE 端点用同步 `def` | FastAPI 自动线程池执行——含 LLM 的同步图调用（30~70s）不阻塞事件循环；SSE 端点保持 async + worker 线程 |
 | 会话排序 | `MAX(checkpoint_id)` | checkpoints 表无 created_at；checkpoint_id 为 uuid6（时间有序） |
 | 聊天流式 | SSE (Server-Sent Events) | 简单单向流，`llm.astream()` 逐 token 推送；执行进度同走 SSE |
 | 弹窗 | 自定义 Modal + framer-motion | 不用系统 alert/confirm |
