@@ -4,11 +4,12 @@ from typing import Optional
 
 from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.graph.state import CompiledStateGraph
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
 
-from ..core.llm import get_llm
+from ..core.llm import get_llm, get_system_prompt
 from ..core.state import SessionPhase
 
+import json
 
 class PRDAgentState(MessagesState):
     """PRD 解析 Agent 的状态（主图状态子集 + messages）。"""
@@ -38,24 +39,12 @@ def parse_prd(state: PRDAgentState) -> dict:
             "messages": [AIMessage(content=f"❌ PRD 解析失败：{e}")],
         }
 
-    prompt = f"""请分析以下 PRD 需求文档，提取所有新增功能的信息。
-
-对每个功能，提取以下字段：
-- name: 功能名称
-- description: 功能描述
-- affected_pages: 涉及的页面路径列表
-- api_endpoints: 相关的 API 接口列表
-- ui_elements: 关键的 UI 元素（按钮、输入框、列表等）
-- acceptance_criteria: 验收标准列表
-
-以 JSON 数组格式返回，每个元素是一个功能对象。
-
-PRD 内容：
-{prd_content[:8000]}
-"""
+    prompt = [
+        SystemMessage(content=get_system_prompt("parse_prd")),
+        HumanMessage(content=f"PRD 内容：\n{prd_content[:8000]}"),
+    ]
 
     try:
-        import json
         response = llm.invoke(prompt)
         content = response.content.strip()
 

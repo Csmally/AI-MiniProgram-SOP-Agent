@@ -11,9 +11,9 @@ from typing import Callable, Optional
 
 from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.graph.state import CompiledStateGraph
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
 
-from ..core.llm import get_llm
+from ..core.llm import get_llm, get_system_prompt
 
 
 class ChatAgentState(MessagesState):
@@ -54,12 +54,12 @@ def build_chat_prompt(messages: list) -> tuple[str, str]:
     return history, question
 
 
-def _build_prompt(history: str, question: str) -> str:
-    return (
-        f"你是一个微信小程序 SOP 检查助手。\n\n"
-        f"对话历史：\n{history}\n\n"
-        f"用户提问：{question}\n\n请简洁回答。"
-    )
+def _build_prompt(history: str, question: str) -> list:
+    """构造消息列表：系统提示词来自 core/llm.py 的任务注册表，历史与提问放入 HumanMessage。"""
+    return [
+        SystemMessage(content=get_system_prompt("chat")),
+        HumanMessage(content=f"对话历史：\n{history}\n\n用户提问：{question}"),
+    ]
 
 
 # ──────────────────────────────────────────────

@@ -4,9 +4,9 @@ from typing import Optional
 
 from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.graph.state import CompiledStateGraph
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
 
-from ..core.llm import get_llm
+from ..core.llm import get_llm, get_system_prompt
 from ..core.state import SessionPhase
 
 
@@ -41,24 +41,10 @@ def generate_sop(state: SOPAgentState) -> dict:
     import json
     features_json = json.dumps(features, ensure_ascii=False, indent=2)
 
-    prompt = f"""请根据以下功能列表，生成 SOP 检查清单。
-
-对每个功能，从 UI 和 API 两个角度分别生成检查项。
-
-每个检查项包含：
-- id: 唯一标识（用 check-001 格式）
-- category: "ui" 或 "api"
-- description: 检查项描述
-- priority: "critical" / "high" / "medium" / "low"
-- check_steps: 具体的检查步骤列表
-- expected_result: 预期结果
-- status: 固定为 "pending"
-
-以 JSON 数组格式返回。
-
-功能列表：
-{features_json}
-"""
+    prompt = [
+        SystemMessage(content=get_system_prompt("generate_sop")),
+        HumanMessage(content=f"功能列表：\n{features_json}"),
+    ]
 
     try:
         response = llm.invoke(prompt)

@@ -34,6 +34,7 @@ from ..agents.chat_agent import build_chat_subgraph
 from ..agents.executor_agent import build_executor_subgraph
 from ..agents.report_agent import build_report_subgraph
 
+from rich import print as rPrint
 
 # ──────────────────────────────────────────────
 # 连接池 / 图实例
@@ -176,6 +177,9 @@ def invoke_action(session_id: str, action: str, updates: Optional[dict] = None) 
     payload: dict = {"next_action": action}
     if updates:
         payload.update(updates)
+    rPrint('=*' * 60)
+    rPrint(payload)
+    rPrint('=*' * 60)
     return get_graph().invoke(payload, _thread_config(session_id))
 
 

@@ -2,9 +2,9 @@
 
 from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.graph.state import CompiledStateGraph
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
 
-from ..core.llm import get_llm
+from ..core.llm import get_llm, get_system_prompt
 from ..core.state import SessionPhase
 
 
@@ -35,17 +35,10 @@ def generate_report(state: ReportAgentState) -> dict:
         "results": check_results,
     }, ensure_ascii=False, indent=2)
 
-    prompt = f"""请根据以下 SOP 检查结果生成一份简明的 Markdown 报告。
-
-包含：
-1. 检查概要
-2. 各项检查结果
-3. 问题汇总（如有失败项）
-4. 建议
-
-检查数据：
-{summary_data[:6000]}
-"""
+    prompt = [
+        SystemMessage(content=get_system_prompt("generate_report")),
+        HumanMessage(content=f"检查数据：\n{summary_data[:6000]}"),
+    ]
 
     try:
         response = llm.invoke(prompt)
