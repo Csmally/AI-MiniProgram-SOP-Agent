@@ -36,6 +36,21 @@ class CheckItem(BaseModel):
 
 
 # -----------------------------
+# 结构化输出容器模型
+# （with_structured_output 不支持裸 list，需用容器包裹）
+# -----------------------------
+
+class FeatureList(BaseModel):
+    """PRD 解析的结构化输出容器。"""
+    features: list[Feature]
+
+
+class CheckItemList(BaseModel):
+    """SOP 生成的结构化输出容器。"""
+    check_items: list[CheckItem]
+
+
+# -----------------------------
 # API 请求模型
 # -----------------------------
 

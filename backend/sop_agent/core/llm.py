@@ -36,7 +36,12 @@ def get_system_prompt(task: str) -> str:
 
 
 def get_llm(task: str) -> ChatOpenAI:
-    """根据任务类型获取对应的 ChatOpenAI 实例。"""
+    """根据任务类型获取对应的 ChatOpenAI 实例。
+
+    DeepSeek V4 默认开启思考模式，但思考模式与强制 tool_choice 互斥
+    （API 报 "Thinking mode does not support this tool_choice"），且显著
+    拖慢响应；因此统一关闭（extra_body thinking=disabled）。
+    """
     settings = get_settings()
     model_key = settings.MODEL_ROUTING.get(task, "deepseek-v4-pro")
     llm_config = settings.get_llm_config(model_key)
@@ -54,4 +59,5 @@ def get_llm(task: str) -> ChatOpenAI:
         api_key=api_key,
         temperature=0.3 if task != "chat" else 0.7,
         max_tokens=4096,
+        extra_body={"thinking": {"type": "disabled"}},
     )

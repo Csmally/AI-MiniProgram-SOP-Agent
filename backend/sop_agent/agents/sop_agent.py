@@ -8,6 +8,7 @@ from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
 
 from ..core.llm import get_llm, get_system_prompt
 from ..core.state import SessionPhase
+from ..sop.models import CheckItemList
 
 
 class SOPAgentState(MessagesState):
@@ -21,7 +22,11 @@ class SOPAgentState(MessagesState):
 
 
 def generate_sop(state: SOPAgentState) -> dict:
-    """根据功能列表生成 SOP 检查清单。"""
+    """根据功能列表生成 SOP 检查清单。
+
+    主路径：function_calling 结构化输出（API 级 schema 强制，需关思考模式）；
+    降级路径：prompt 约束 + 健壮解析。
+    """
     features = state.get("features", [])
     if not features:
         # 没有功能时不推进 phase，只提示
@@ -47,59 +52,85 @@ def generate_sop(state: SOPAgentState) -> dict:
     ]
 
     try:
-        response = llm.invoke(prompt)
-        content = response.content.strip()
-
-        check_items = []
         try:
-            if "```" in content:
-                content = content.split("```")[1]
-                if content.startswith("json"):
-                    content = content[4:]
-            check_items = json.loads(content)
-            # 确保每个 item 有完整字段
-            for item in check_items:
-                if "status" not in item:
-                    item["status"] = "pending"
-                if "screenshots" not in item:
-                    item["screenshots"] = []
-                if "result_detail" not in item:
-                    item["result_detail"] = None
-        except json.JSONDecodeError:
-            check_items = [{
-                "id": "check-001",
-                "category": "ui",
-                "description": "请检查生成的 JSON 格式",
-                "priority": "high",
-                "check_steps": ["检查生成结果"],
-                "expected_result": "JSON 格式正确",
-                "status": "pending",
-                "screenshots": [],
-                "result_detail": content,
-            }]
-
-        ui_count = sum(1 for c in check_items if c.get("category") == "ui")
-        api_count = sum(1 for c in check_items if c.get("category") == "api")
-
-        msg = (
-            f"已生成 {len(check_items)} 个检查项：\n"
-            f"- UI 检查：{ui_count} 项\n"
-            f"- API 检查：{api_count} 项\n\n"
-            "请在右侧面板审核检查清单，确认无误后点击「开始检查」。"
-        )
-
-        return {
-            "check_items": check_items,
-            "current_phase": SessionPhase.SOP_GENERATED.value,
-            "approval": "pending",
-            "error": None,
-            "messages": [AIMessage(content=msg)],
-        }
+            structured = llm.with_structured_output(CheckItemList, method="function_calling")
+            result = structured.invoke(prompt)
+            check_items = [i.model_dump() for i in result.check_items]
+        except Exception:
+            check_items = _generate_sop_fallback(llm, prompt)
     except Exception as e:
         return {
             "error": str(e),
             "messages": [AIMessage(content=f"❌ SOP 生成失败：{e}")],
         }
+
+    ui_count = sum(1 for c in check_items if c.get("category") == "ui")
+    api_count = sum(1 for c in check_items if c.get("category") == "api")
+
+    msg = (
+        f"已生成 {len(check_items)} 个检查项：\n"
+        f"- UI 检查：{ui_count} 项\n"
+        f"- API 检查：{api_count} 项\n\n"
+        "请在右侧面板审核检查清单，确认无误后点击「开始检查」。"
+    )
+
+    return {
+        "check_items": check_items,
+        "current_phase": SessionPhase.SOP_GENERATED.value,
+        "approval": "pending",
+        "error": None,
+        "messages": [AIMessage(content=msg)],
+    }
+
+
+def _generate_sop_fallback(llm, prompt: list) -> list[dict]:
+    """降级路径：prompt 约束输出 JSON + 健壮解析（剥围栏、字段修补）。"""
+    import json
+    response = llm.invoke(prompt)
+    content = response.content.strip()
+
+    check_items = []
+    try:
+        if "```" in content:
+            content = content.split("```")[1]
+            if content.startswith("json"):
+                content = content[4:]
+        check_items = json.loads(content)
+        if isinstance(check_items, dict):
+            check_items = check_items.get("check_items") or [check_items]
+        if not isinstance(check_items, list):
+            check_items = [check_items]
+    except Exception:
+        check_items = []
+
+    patched = []
+    for item in check_items:
+        if not isinstance(item, dict):
+            continue
+        patched.append({
+            "id": item.get("id") or f"check-{len(patched)+1:03d}",
+            "category": item.get("category") if item.get("category") in ("ui", "api") else "ui",
+            "description": str(item.get("description", "")),
+            "priority": item.get("priority") if item.get("priority") in ("critical", "high", "medium", "low") else "medium",
+            "check_steps": item.get("check_steps") or [],
+            "expected_result": str(item.get("expected_result", "")),
+            "status": "pending",
+            "screenshots": [],
+            "result_detail": None,
+        })
+    if not patched:
+        patched = [{
+            "id": "check-001",
+            "category": "ui",
+            "description": "请检查生成的 JSON 格式",
+            "priority": "high",
+            "check_steps": ["检查生成结果"],
+            "expected_result": "JSON 格式正确",
+            "status": "pending",
+            "screenshots": [],
+            "result_detail": content[:500],
+        }]
+    return patched
 
 
 def build_sop_subgraph() -> CompiledStateGraph:
