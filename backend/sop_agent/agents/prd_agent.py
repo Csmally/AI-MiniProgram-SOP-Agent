@@ -12,6 +12,8 @@ from ..sop.models import FeatureList
 
 import json
 
+from rich import print as rPrint
+
 class PRDAgentState(MessagesState):
     """PRD 解析 Agent 的状态（主图状态子集 + messages）。"""
 
@@ -54,6 +56,9 @@ def parse_prd(state: PRDAgentState) -> dict:
             structured = llm.with_structured_output(FeatureList, method="function_calling")
             result = structured.invoke(prompt)
             features = [f.model_dump() for f in result.features]
+            rPrint("[bold red]==========parse_prd==========[/bold red]")
+            rPrint(features)
+            rPrint("[bold red]==========parse_prd==========[/bold red]")
         except Exception:
             features = _parse_prd_fallback(llm, prompt)
     except Exception as e:

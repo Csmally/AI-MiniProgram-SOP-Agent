@@ -137,7 +137,9 @@ def build_graph() -> CompiledStateGraph:
         {"parse_prd": "parse_prd", "generate_sop": "generate_sop",
          "chat_agent": "chat_agent", "dispatch": "dispatch"},
     )
-    workflow.add_edge("parse_prd", "generate_sop")
+    # 两步交互：upload_prd 只解析（phase 停在 prd_uploaded），
+    # 用户点「生成检查清单」才触发 generate_sop → 审核中断
+    workflow.add_edge("parse_prd", END)
     workflow.add_edge("generate_sop", "review_list")
     workflow.add_edge("review_list", END)
     workflow.add_edge("chat_agent", END)
@@ -177,9 +179,9 @@ def invoke_action(session_id: str, action: str, updates: Optional[dict] = None) 
     payload: dict = {"next_action": action}
     if updates:
         payload.update(updates)
-    rPrint('=*' * 60)
+    rPrint("[bold green]==========准备入图==========[/bold green]")
     rPrint(payload)
-    rPrint('=*' * 60)
+    rPrint("[bold green]==========准备入图==========[/bold green]")
     return get_graph().invoke(payload, _thread_config(session_id))
 
 

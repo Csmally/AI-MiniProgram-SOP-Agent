@@ -125,7 +125,7 @@ export function useSession() {
     setLoading(true);
     try {
       await api.uploadPrd(sessionId, file);
-      // phase/清单以服务端为准：上传已链式「解析+生成清单」，回刷完整状态
+      // phase 以服务端为准：上传后 checkpoint phase=prd_uploaded，回刷完整状态
       await load(sessionId);
     } finally {
       setLoading(false);
@@ -137,7 +137,7 @@ export function useSession() {
     setLoading(true);
     try {
       await api.generateSop(sessionId);
-      await load(sessionId); // 重新生成后回刷（以服务端 checkpoint 为准）
+      await load(sessionId); // 生成后回刷（phase= sop_generated，以服务端为准）
     } finally {
       setLoading(false);
     }

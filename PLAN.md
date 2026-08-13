@@ -54,9 +54,8 @@
        ↓
 主图 START ──router──▶ 所有操作唯一入口（按 next_action 分发）
        │
-       ├─ upload_prd → prd_agent(子图) 解析功能 → sop_agent(子图) 生成清单
-       │               → review_list [Human-in-the-loop 中断]
-       ├─ generate_sop（重新生成）→ sop_agent(子图) → review_list [中断]
+       ├─ upload_prd → prd_agent(子图) 解析功能 → END（phase=prd_uploaded）
+       ├─ generate_sop → sop_agent(子图) 生成清单 → review_list [Human-in-the-loop 中断]
        ├─ approve/run → dispatch → fan_out[Send] → execute_item ×N（并行执行 Agent 子图）
        │               → collect 汇总 → report_agent(子图) 生成报告
        └─ chat → chat_agent(子图) 对话答疑
