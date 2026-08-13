@@ -2,9 +2,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import { useSession } from './hooks/useSession';
 import SessionList from './components/SessionList';
 import ChatPanel from './components/ChatPanel';
-import ChecklistView from './components/ChecklistView';
-import ProgressPanel from './components/ProgressPanel';
-import ReportView from './components/ReportView';
+import RightPanel from './components/RightPanel';
 
 function App() {
   const session = useSession();
@@ -24,34 +22,6 @@ function App() {
   const handleSelect = useCallback((sid) => {
     session.load(sid);
   }, [session]);
-
-  const rightPanel = () => {
-    switch (session.phase) {
-      case 'sop_generated':
-      case 'ready':
-        return (
-          <ChecklistView
-            items={session.checkItems}
-            onUpdate={session.updateItem}
-            onDelete={session.deleteItem}
-            onAdd={session.addItem}
-            onApprove={session.approveChecklist}
-            onRegenerate={session.generateSop}
-            loading={session.loading}
-          />
-        );
-      case 'running':
-        return <ProgressPanel items={session.checkItems} agentProgress={session.agentProgress} />;
-      case 'completed':
-        return <ReportView report={session.report} />;
-      default:
-        return (
-          <div className="right-placeholder">
-            <p>上传 PRD 后将在此显示检查清单</p>
-          </div>
-        );
-    }
-  };
 
   return (
     <div className="app">
@@ -78,7 +48,7 @@ function App() {
           canRun={session.checkItems.length > 0}
         />
         <aside className="app-sidebar">
-          {rightPanel()}
+          <RightPanel session={session} />
         </aside>
       </main>
     </div>
