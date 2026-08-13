@@ -149,7 +149,7 @@ ai-miniprogram-sop-agent/
 | 阶段一：后端基础 | ✅ 完成 | FastAPI + LangGraph + DeepSeek 集成 |
 | 阶段二：PRD + SOP | ✅ 完成 | PRD 解析、SOP 生成（真实数据测试通过） |
 | 阶段三：前端 | ✅ 完成 | React 聊天界面、暗色科技风 UI、流式对话、会话管理、PostgreSQL 持久化 |
-| 阶段四：检查执行 | ⬜ 未开始 | WebSocket + minium Tool 自动化检查 |
+| 阶段四：检查执行 | ⬜ 未开始 | WebSocket + minium Tool 自动化检查；chat 并入主图（Agent 化，含聊天滚动摘要记忆） |
 | 阶段五：报告收尾 | ⬜ 未开始 | 报告生成、README、生产部署 |
 
 ## 技术决策记录
@@ -169,6 +169,7 @@ ai-miniprogram-sop-agent/
 - [ ] 阶段四：minium 集成（微信开发者工具自动化）
 - [ ] 阶段五：报告生成、README、生产部署
 - [ ] 前端 `run` 按钮的检查进度实时推送（WebSocket）
+- [ ] 聊天记忆优化（**暂缓，随阶段四一起做**）：`chat`/`chat_stream` 目前只带最近 10 条消息，超过即失忆。方案：主图 Agent 化后 chat 作为 LLM 节点并入（方案 C3），记忆采用滚动摘要（最近 K 条原文 + 更早内容压缩为摘要，用 Flash 模型）。详见 2026-08-13 讨论。
 
 ## 风险与假设
 
