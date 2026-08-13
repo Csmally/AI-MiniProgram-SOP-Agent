@@ -205,6 +205,7 @@ body { font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif; back
 .progress-status { font-size: 16px; font-weight: bold; width: 22px; text-align: center; }
 .progress-category { padding: 1px 6px; border-radius: 4px; color: #fff; font-size: 10px; }
 .progress-desc { flex: 1; }
+.progress-agent { padding: 1px 6px; border-radius: 4px; background: rgba(139, 92, 246, 0.15); color: #a78bfa; font-size: 10px; }
 
 /* ── Report ── */
 .report-view { padding: 16px; }

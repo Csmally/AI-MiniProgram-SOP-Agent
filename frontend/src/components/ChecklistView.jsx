@@ -39,7 +39,7 @@ export default function ChecklistView({ items, onUpdate, onDelete, onAdd, onAppr
       </div>
 
       <div className="checklist-actions">
-        <button className="btn-primary" onClick={onApprove} disabled={loading}>
+        <button className="btn-primary" onClick={onApprove} disabled={loading || items.length === 0}>
           确认并开始检查
         </button>
         <button className="btn-secondary" onClick={onRegenerate} disabled={loading}>

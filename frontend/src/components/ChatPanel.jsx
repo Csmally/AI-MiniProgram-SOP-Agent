@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
 import { motion, AnimatePresence } from 'framer-motion';
 
-export default function ChatPanel({ messages, onSend, onUploadPrd, loading, phase, onGenerateSop, onRunChecks }) {
+export default function ChatPanel({ messages, onSend, onUploadPrd, loading, phase, onGenerateSop, onRunChecks, canRun }) {
   const [input, setInput] = useState('');
   const bottomRef = useRef(null);
   const fileRef = useRef(null);
@@ -87,7 +87,7 @@ export default function ChatPanel({ messages, onSend, onUploadPrd, loading, phas
           </button>
         )}
         {(phase === 'sop_generated' || phase === 'ready') && (
-          <button className="btn-action btn-primary" onClick={onRunChecks} disabled={loading}>
+          <button className="btn-action btn-primary" onClick={onRunChecks} disabled={loading || !canRun}>
             开始检查
           </button>
         )}

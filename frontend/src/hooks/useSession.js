@@ -11,6 +11,8 @@ export function useSession() {
   const [messages, setMessages] = useState([]);
   const [sessions, setSessions] = useState([]);
   const [loading, setLoading] = useState(false);
+  // 本轮执行中各 Agent 的实时进度（SSE item 事件驱动，key=item_id）
+  const [agentProgress, setAgentProgress] = useState({});
 
   const load = useCallback(async (sid) => {
     setLoading(true);
@@ -21,6 +23,7 @@ export function useSession() {
       setFeatures(data.features || []);
       setCheckItems(data.check_items || []);
       setMessages(data.messages || []);
+      setAgentProgress({});
       if (data.report_content) {
         setReport({
           report_content: data.report_content,
@@ -53,6 +56,8 @@ export function useSession() {
       setFeatures(data.features || []);
       setCheckItems(data.check_items || []);
       setMessages(data.messages || []);
+      setReport(null);
+      setAgentProgress({});
       await refreshSessions();
     } finally {
       setLoading(false);
@@ -71,44 +76,87 @@ export function useSession() {
     await refreshSessions();
   }, [refreshSessions]);
 
+  // SSE 事件统一处理：phase 与结果一律以服务端 checkpoint 为准
+  const handleRunEvent = useCallback((event) => {
+    switch (event.type) {
+      case 'phase':
+        setPhase(event.phase);
+        break;
+      case 'item':
+        if (event.item_id) {
+          setAgentProgress(prev => ({
+            ...prev,
+            [event.item_id]: { status: event.status, agent: event.agent },
+          }));
+        }
+        break;
+      case 'report':
+        setReport(prev => ({
+          ...(prev || { summary: {} }),
+          report_content: event.content,
+        }));
+        break;
+      case 'done':
+        if (event.state) {
+          const results = event.state.check_results || [];
+          const passed = results.filter(r => r.status === 'passed').length;
+          const failed = results.filter(r => r.status === 'failed').length;
+          setPhase(event.state.current_phase || 'completed');
+          setCheckResults(results);
+          setReport({
+            report_content: event.state.report_content || '',
+            summary: {
+              total: results.length,
+              passed,
+              failed,
+              pass_rate: results.length ? `${Math.round((passed / results.length) * 100)}%` : 'N/A',
+            },
+          });
+          if (Array.isArray(event.state.messages)) setMessages(event.state.messages);
+        }
+        break;
+      default:
+        break;
+    }
+  }, []);
+
   const uploadPrd = useCallback(async (file) => {
     if (!sessionId) return;
     setLoading(true);
     try {
-      const data = await api.uploadPrd(sessionId, file);
-      setFeatures(data.features || []);
-      const msg = data.message;
-      setMessages(prev => [...prev, { role: 'user', content: `[上传 PRD: ${file.name}]` }, { role: 'assistant', content: msg }]);
-      setPhase('prd_uploaded');
+      await api.uploadPrd(sessionId, file);
+      // phase/清单以服务端为准：上传已链式「解析+生成清单」，回刷完整状态
+      await load(sessionId);
     } finally {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [sessionId, load]);
 
   const generateSop = useCallback(async () => {
     if (!sessionId) return;
     setLoading(true);
     try {
-      const data = await api.generateSop(sessionId);
-      setCheckItems(data.check_items || []);
-      setMessages(prev => [...prev, { role: 'assistant', content: data.message }]);
-      setPhase('sop_generated');
+      await api.generateSop(sessionId);
+      await load(sessionId); // 重新生成后回刷（以服务端 checkpoint 为准）
     } finally {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [sessionId, load]);
 
   const approveChecklist = useCallback(async () => {
-    if (!sessionId) return;
+    if (!sessionId || checkItems.length === 0) return;
     setLoading(true);
+    setAgentProgress({});
+    setPhase('running');
     try {
-      const data = await api.approveChecklist(sessionId);
-      setPhase(data.current_phase);
-      setMessages(prev => [...prev, ...(data.messages || [])]);
+      await api.streamRun(sessionId, 'approve', handleRunEvent);
+    } catch (e) {
+      setMessages(prev => [...prev, { role: 'assistant', content: '检查执行失败: ' + e.message }]);
+      await load(sessionId);
     } finally {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [sessionId, checkItems.length, handleRunEvent, load]);
 
   const updateItem = useCallback(async (itemId, data) => {
     if (!sessionId) return;
@@ -129,21 +177,19 @@ export function useSession() {
   }, [sessionId]);
 
   const runChecks = useCallback(async () => {
-    if (!sessionId) return;
-    setPhase('running');
+    if (!sessionId || checkItems.length === 0) return;
     setLoading(true);
+    setAgentProgress({});
+    setPhase('running');
     try {
-      const data = await api.runChecks(sessionId);
-      setMessages(prev => [...prev, { role: 'assistant', content: data.message }]);
-      // 获取报告
-      const rep = await api.getReport(sessionId);
-      setCheckResults(rep.summary);
-      setReport(rep);
-      setPhase('completed');
+      await api.streamRun(sessionId, 'run', handleRunEvent);
+    } catch (e) {
+      setMessages(prev => [...prev, { role: 'assistant', content: '检查执行失败: ' + e.message }]);
+      await load(sessionId);
     } finally {
       setLoading(false);
     }
-  }, [sessionId]);
+  }, [sessionId, checkItems.length, handleRunEvent, load]);
 
   const sendMessage = useCallback(async (text) => {
     if (!sessionId) return;
@@ -188,7 +234,7 @@ export function useSession() {
   }, [sessionId]);
 
   return {
-    sessionId, phase, features, checkItems, checkResults, report, messages, sessions, loading,
+    sessionId, phase, features, checkItems, checkResults, report, messages, sessions, loading, agentProgress,
     init, loadLatest, load, uploadPrd, generateSop, approveChecklist, updateItem, deleteItem, addItem, runChecks, sendMessage, deleteSession,
   };
 }

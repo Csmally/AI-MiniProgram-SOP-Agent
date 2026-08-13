@@ -74,6 +74,13 @@ class SessionResponse(BaseModel):
     check_results: list[dict] = []
     report_content: str = ""
     messages: list[dict] = []
+    agent_progress: list[dict] = []
+
+
+class StreamRunRequest(BaseModel):
+    """SSE 流式执行请求（run/approve 等操作）。"""
+    next_action: str = "run"
+    approval: Optional[str] = None
 
 
 class ParseResultResponse(BaseModel):

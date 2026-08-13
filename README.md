@@ -69,9 +69,9 @@ npm run dev
 
 1. 打开 `http://localhost:5173`，自动加载最近的会话（或新建）
 2. 点击「上传 PRD」选择 Markdown 需求文档
-3. Agent 自动解析功能 → 点击「生成检查清单」
+3. 多 Agent 自动协作：prd_agent 解析功能 → sop_agent 生成检查清单（不满意可点「重新生成」）
 4. 右侧面板审核/编辑检查项 → 「确认并开始检查」
-5. 检查执行完成后查看报告
+5. executor Agent 并行逐项检查（SSE 实时进度）→ report Agent 生成报告
 6. 左侧面板可切换/删除历史会话，会话持久化在 PostgreSQL
 
 ## 项目结构

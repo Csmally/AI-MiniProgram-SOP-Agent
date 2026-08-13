@@ -36,8 +36,9 @@
 │              FastAPI 后端                          │
 │                                                    │
 │  ┌─────▼──────────────▼───────────────────────┐   │
-│  │          LangGraph StateGraph               │   │
-│  │  PRD解析 → SOP生成 → 人工审核 → 执行检查     │   │
+│  │    LangGraph 主图（多 Agent 子图管道）      │   │
+│  │  router → prd/sop/chat/executor/report      │   │
+│  │  Agent 子图 + 人工审核中断 + Send 并行执行   │   │
 │  └──────────────────────────────────────────────┘   │
 └──────────────────────┬─────────────────────────────┘
                        │
@@ -46,28 +47,24 @@
                 + langgraph_checkpoint 表)
 ```
 
-### 数据流程（LangGraph 驱动）
+### 数据流程（多 Agent 子图 + LangGraph 主图驱动）
 
 ```
 用户上传PRD(Markdown)
        ↓
-LangGraph Node: parse_prd
-  → AI 提取功能信息
-       ↓
-LangGraph Node: generate_sop
-  → DeepSeek-V4-Pro 结构化输出 CheckItem 列表
-       ↓
-LangGraph Node: review_list  [Human-in-the-loop 中断]
-  → 前端展示清单 → 用户审核/编辑
-  → 确认 → resume 图执行
-  → 拒绝 → 回到 generate_sop
-       ↓
-LangGraph Node: execute_checks
-  → DeepSeek-V4-Pro 自主调用 minium Tool
-       ↓
-LangGraph Node: generate_report
-  → 汇总结果 → 生成 Markdown 报告
+主图 START ──router──▶ 所有操作唯一入口（按 next_action 分发）
+       │
+       ├─ upload_prd → prd_agent(子图) 解析功能 → sop_agent(子图) 生成清单
+       │               → review_list [Human-in-the-loop 中断]
+       ├─ generate_sop（重新生成）→ sop_agent(子图) → review_list [中断]
+       ├─ approve/run → dispatch → fan_out[Send] → execute_item ×N（并行执行 Agent 子图）
+       │               → collect 汇总 → report_agent(子图) 生成报告
+       └─ chat → chat_agent(子图) 对话答疑
 ```
+
+- **5 个 Agent 子图**：prd_agent / sop_agent / chat_agent / executor_agent（每检查项一实例）/ report_agent，各自独立 State schema、LLM 与提示词
+- **操作模式**：REST = 触发 action + 读 checkpoint；phase 唯一来源是后端 checkpoint，前端不本地推断
+- **SSE 进度**：`POST /run/stream` 流式推送各 Agent 实时进度（同步图在 worker 线程执行）
 
 ## 项目目录结构
 
@@ -76,16 +73,18 @@ ai-miniprogram-sop-agent/
 ├── backend/
 │   └── sop_agent/
 │       ├── main.py                # FastAPI 入口
-│       ├── api/routes.py          # REST API + SSE 流式
+│       ├── api/routes.py          # REST API + SSE 流式（action 触发 + checkpoint 读取）
+│       ├── agents/                # 5 个 Agent 子图（chat/prd/sop/executor/report）
 │       ├── core/
-│       │   ├── orchestrator.py    # LangGraph 状态图
-│       │   ├── state.py           # AgentState (MessagesState)
+│       │   ├── orchestrator.py    # 主图编排（router + Send fan-out + 统一操作 API）
+│       │   ├── state.py           # MainGraphState（reducer 通道）
+│       │   ├── llm.py             # 模型工厂（任务路由）
 │       │   └── config.py          # 配置管理（.env 驱动）
 │       ├── sop/models.py          # Pydantic 数据模型
-│       ├── prd/                   # PRD 解析
-│       ├── tools/                 # minium Tool 封装
-│       ├── executor/              # 检查执行器
-│       └── report/                # 报告生成
+│       ├── prd/                   # （预留）PRD 解析
+│       ├── tools/                 # （预留）minium Tool 封装
+│       ├── executor/              # （预留）检查执行器
+│       └── report/                # （预留）报告生成
 ├── frontend/
 │   ├── src/
 │   │   ├── App.jsx                # 根组件
@@ -138,6 +137,7 @@ ai-miniprogram-sop-agent/
 | `POST` | `/api/sessions/{id}/approve` | 审核通过 |
 | `GET/PUT/DELETE/POST` | `/api/sessions/{id}/check-items` | 检查项 CRUD |
 | `POST` | `/api/sessions/{id}/run` | 开始执行检查 |
+| `POST` | `/api/sessions/{id}/run/stream` | SSE 流式执行（Agent 实时进度） |
 | `GET` | `/api/sessions/{id}/report` | 获取报告 |
 | `POST` | `/api/sessions/{id}/chat` | AI 对话 |
 | `POST` | `/api/sessions/{id}/chat/stream` | AI 对话（SSE 流式） |
@@ -149,27 +149,30 @@ ai-miniprogram-sop-agent/
 | 阶段一：后端基础 | ✅ 完成 | FastAPI + LangGraph + DeepSeek 集成 |
 | 阶段二：PRD + SOP | ✅ 完成 | PRD 解析、SOP 生成（真实数据测试通过） |
 | 阶段三：前端 | ✅ 完成 | React 聊天界面、暗色科技风 UI、流式对话、会话管理、PostgreSQL 持久化 |
-| 阶段四：检查执行 | ⬜ 未开始 | WebSocket + minium Tool 自动化检查；chat 并入主图（Agent 化，含聊天滚动摘要记忆） |
+| 阶段四：检查执行 | 🟡 进行中 | ✅ 多 Agent 架构重构（5 个 Agent 子图 + Send 并行执行 + SSE 进度）；⬜ minium Tool 自动化检查（executor_agent 仍为桩）；⬜ 聊天滚动摘要记忆 |
 | 阶段五：报告收尾 | ⬜ 未开始 | 报告生成、README、生产部署 |
 
 ## 技术决策记录
 
 | 决策 | 选择 | 原因 |
 |------|------|------|
-| Agent 编排 | LangGraph StateGraph | 状态机流程 + Human-in-the-loop |
-| 状态定义 | MessagesState 继承 | `add_messages` reducer 自动追加消息 |
-| 持久化 | LangGraph PostgresSaver | 自带 psycopg 依赖，checkpoint 自动持久化 |
-| 图执行 | 同步 `graph.invoke()` | 节点改同步（`llm.invoke()`），避免 Windows 事件循环问题 |
-| 聊天流式 | SSE (Server-Sent Events) | 简单单向流，`llm.astream()` 逐 token 推送 |
+| Agent 编排 | LangGraph 主图 + Agent 子图 | 主图管道保留确定性流程 + HITL；5 个环节各为独立 Agent 子图 |
+| 操作入口 | 统一 action 路由 | `invoke({next_action, ...}, config)` 从 START 分发，自动丢弃旧 pending；phase 唯一来源 = checkpoint |
+| 并行执行 | Send API fan-out | 每检查项一个 executor Agent 并行（reducer 通道 + run_id 过滤隔离） |
+| 状态定义 | MainGraphState + 子集 schema | `add_messages` / `operator.add` reducer；子图共享通道声明 LastValue 只回本项贡献 |
+| 持久化 | LangGraph PostgresSaver + psycopg_pool | ConnectionPool 线程安全（SSE worker 线程共享） |
+| 图执行 | 同步 `graph.invoke()/stream()` | 节点改同步（`llm.invoke()`），避免 Windows 事件循环问题；SSE 时图在 worker 线程跑 |
+| 会话排序 | `MAX(checkpoint_id)` | checkpoints 表无 created_at；checkpoint_id 为 uuid6（时间有序） |
+| 聊天流式 | SSE (Server-Sent Events) | 简单单向流，`llm.astream()` 逐 token 推送；执行进度同走 SSE |
 | 弹窗 | 自定义 Modal + framer-motion | 不用系统 alert/confirm |
 | UI 风格 | 暗色科技风 + 渐变 | 用户要求"科技感" |
 
 ## 待办
 
-- [ ] 阶段四：minium 集成（微信开发者工具自动化）
+- [ ] 阶段四：minium 集成（微信开发者工具自动化，替换 executor_agent 桩逻辑）
 - [ ] 阶段五：报告生成、README、生产部署
-- [ ] 前端 `run` 按钮的检查进度实时推送（WebSocket）
-- [ ] 聊天记忆优化（**暂缓，随阶段四一起做**）：`chat`/`chat_stream` 目前只带最近 10 条消息，超过即失忆。方案：主图 Agent 化后 chat 作为 LLM 节点并入（方案 C3），记忆采用滚动摘要（最近 K 条原文 + 更早内容压缩为摘要，用 Flash 模型）。详见 2026-08-13 讨论。
+- [x] 多 Agent 架构重构（5 个 Agent 子图 + Send 并行 + SSE 进度）
+- [ ] 聊天记忆优化：chat_agent 目前只带最近 10 条消息，超过即失忆。方案：记忆采用滚动摘要（最近 K 条原文 + 更早内容压缩为摘要，用 Flash 模型）。详见 2026-08-13 讨论。
 
 ## 风险与假设
 

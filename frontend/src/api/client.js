@@ -94,3 +94,35 @@ export async function sendChat(sessionId, message) {
   if (!res.ok) throw new Error('Chat failed');
   return res.json();
 }
+
+// SSE 流式执行（run/approve）：逐事件回调 onEvent({type: 'phase'|'item'|'report'|'done'|'error', ...})
+export async function streamRun(sessionId, nextAction = 'run', onEvent) {
+  const res = await fetch(`${BASE}/sessions/${sessionId}/run/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      next_action: nextAction,
+      approval: nextAction === 'approve' ? 'approved' : null,
+    }),
+  });
+  if (!res.ok || !res.body) throw new Error(`stream failed: ${res.status}`);
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    const parts = buf.split('\n\n');
+    buf = parts.pop();
+    for (const part of parts) {
+      for (const line of part.split('\n')) {
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (data === '[DONE]') continue;
+        if (!data || data === '{}') continue; // 心跳
+        try { onEvent(JSON.parse(data)); } catch { /* 忽略无法解析的行 */ }
+      }
+    }
+  }
+}

@@ -41,7 +41,7 @@ function App() {
           />
         );
       case 'running':
-        return <ProgressPanel items={session.checkItems} />;
+        return <ProgressPanel items={session.checkItems} agentProgress={session.agentProgress} />;
       case 'completed':
         return <ReportView report={session.report} />;
       default:
@@ -75,6 +75,7 @@ function App() {
           phase={session.phase}
           onGenerateSop={session.generateSop}
           onRunChecks={session.runChecks}
+          canRun={session.checkItems.length > 0}
         />
         <aside className="app-sidebar">
           {rightPanel()}
