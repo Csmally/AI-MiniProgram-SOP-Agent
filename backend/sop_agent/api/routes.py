@@ -11,8 +11,9 @@ import uuid
 
 from fastapi import APIRouter, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage
 
+from ..agents import chat_agent
 from ..core.state import create_initial_state
 from ..core import orchestrator
 from ..sop.models import (
@@ -271,41 +272,65 @@ async def chat(session_id: str, body: ChatRequest):
 
 @router.post("/sessions/{session_id}/chat/stream")
 async def chat_stream(session_id: str, body: ChatRequest):
-    state = orchestrator.get_session_state(session_id)
-    if state is None:
+    """流式聊天 — 经主图调用 chat_agent（聊天逻辑唯一实现）。
+
+    同步图在 worker 线程执行，chat_agent 节点内 llm.stream 逐 token 推送，
+    经 thread-local 钩子 + call_soon_threadsafe 桥接成 SSE。前端 wire 格式不变。
+    """
+    if orchestrator.get_session_state(session_id) is None:
         raise HTTPException(status_code=404, detail="会话不存在")
 
-    messages = state.get("messages", [])[-10:]
-    history_lines = []
-    for m in messages:
-        role = m.get("role") if isinstance(m, dict) else getattr(m, "type", "unknown")
-        content = m.get("content", "") if isinstance(m, dict) else getattr(m, "content", "")
-        history_lines.append(f"{'用户' if role in ('human','user') else '助手'}: {content[:200]}")
-    history = "\n".join(history_lines)
+    lock = _session_lock(session_id)
+    if not lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="该会话正在执行中，请稍后再试")
 
-    from ..core.llm import get_llm
-    llm = get_llm("chat")
-    prompt = (
-        f"你是一个微信小程序 SOP 检查助手。\n\n"
-        f"对话历史：\n{history}\n\n"
-        f"用户提问：{body.message}\n\n请简洁回答。"
-    )
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def worker():
+        try:
+            chat_agent.register_stream_hook(
+                lambda token: loop.call_soon_threadsafe(queue.put_nowait, ("token", token))
+            )
+            orchestrator.invoke_action(
+                session_id, "chat",
+                {"messages": [HumanMessage(content=body.message)]},
+            )
+        except Exception as exc:
+            loop.call_soon_threadsafe(queue.put_nowait, ("error", str(exc)))
+        finally:
+            chat_agent.unregister_stream_hook()
+            lock.release()
+            loop.call_soon_threadsafe(queue.put_nowait, ("__end__", None))
+
+    threading.Thread(target=worker, daemon=True).start()
 
     async def generate():
-        full_reply = ""
-        async for chunk in llm.astream(prompt):
-            token = chunk.content if hasattr(chunk, 'content') else str(chunk)
-            if token:
-                full_reply += token
-                yield f"data: {token}\n\n"
+        try:
+            while True:
+                try:
+                    kind, data = await asyncio.wait_for(queue.get(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    yield ": ping\n\n"  # SSE 注释行，前端自动忽略
+                    continue
+                if kind == "__end__":
+                    break
+                if kind == "error":
+                    # 以纯文本 token 形式进入回复气泡，前端无需特殊处理
+                    yield f"data: 回复失败: {data}\n\n"
+                    break
+                if kind == "token":
+                    yield f"data: {data}\n\n"
+        except asyncio.CancelledError:
+            raise  # 客户端断开：worker 继续跑完，消息仍持久化
+        finally:
+            yield "data: [DONE]\n\n"
 
-        messages = list(state.get("messages", []))
-        messages.append(HumanMessage(content=body.message))
-        messages.append(AIMessage(content=full_reply))
-        orchestrator.update_state(session_id, {"messages": messages})
-        yield "data: [DONE]\n\n"
-
-    return StreamingResponse(generate(), media_type="text/event-stream")
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ──────────────────────────────────────────────

@@ -1,6 +1,13 @@
-"""对话 Agent（llm-agent）— 聊天答疑，替换原 routes.py 手写的 chat 实现。"""
+"""对话 Agent（llm-agent）— 聊天答疑，聊天逻辑的唯一权威实现。
 
-from typing import Annotated, TypedDict
+/chat（非流式）与 /chat/stream（流式）都经主图调用本 Agent：
+- 非流式：节点内 llm.invoke 一次性返回；
+- 流式：/chat/stream 的 worker 线程先 register_stream_hook 注册回调，
+  节点内 llm.stream 逐 token 推送，token 经回调桥接回 SSE。
+"""
+
+import threading
+from typing import Annotated, Callable, Optional, TypedDict
 
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.state import CompiledStateGraph
@@ -16,9 +23,24 @@ class ChatAgentState(TypedDict):
     messages: Annotated[list, add_messages]
 
 
-def chat(state: ChatAgentState) -> dict:
-    """处理用户提问：带最近 10 条历史，简洁回答。"""
-    messages = state.get("messages", [])[-10:]
+# ──────────────────────────────────────────────
+# 流式回调钩子（thread-local）
+# ──────────────────────────────────────────────
+
+_stream_local = threading.local()
+
+
+def register_stream_hook(hook: Callable[[str], None]) -> None:
+    """注册流式 token 回调（仅当前线程生效，供 /chat/stream 的 worker 线程使用）。"""
+    _stream_local.hook = hook
+
+
+def unregister_stream_hook() -> None:
+    _stream_local.hook = None
+
+
+def build_chat_prompt(messages: list) -> tuple[str, str]:
+    """从消息历史构造 (历史文本, 用户提问)。"""
     history_lines = []
     for m in messages:
         content = m.get("content", "") if isinstance(m, dict) else getattr(m, "content", "")
@@ -32,17 +54,41 @@ def chat(state: ChatAgentState) -> dict:
         if isinstance(user_message, dict)
         else getattr(user_message, "content", "")
     )
+    return history, question
 
-    llm = get_llm("chat")
-    prompt = (
+
+def _build_prompt(history: str, question: str) -> str:
+    return (
         f"你是一个微信小程序 SOP 检查助手。\n\n"
         f"对话历史：\n{history}\n\n"
         f"用户提问：{question}\n\n请简洁回答。"
     )
-    response = llm.invoke(prompt)
-    reply = response.content.strip()
 
-    return {"messages": [AIMessage(content=reply)]}
+
+# ──────────────────────────────────────────────
+# Agent 节点
+# ──────────────────────────────────────────────
+
+def chat(state: ChatAgentState) -> dict:
+    """处理用户提问：带最近 10 条历史，简洁回答。"""
+    history, question = build_chat_prompt(state.get("messages", [])[-10:])
+    llm = get_llm("chat")
+    prompt = _build_prompt(history, question)
+
+    hook: Optional[Callable[[str], None]] = getattr(_stream_local, "hook", None)
+    if hook is not None:
+        # 流式：逐 token 推送，同时累积完整回复（最终以完整消息落盘）
+        full_reply = ""
+        for chunk in llm.stream(prompt):
+            token = chunk.content if hasattr(chunk, "content") else str(chunk)
+            if token:
+                full_reply += token
+                hook(token)
+        return {"messages": [AIMessage(content=full_reply)]}
+
+    # 非流式：一次性返回
+    response = llm.invoke(prompt)
+    return {"messages": [AIMessage(content=response.content.strip())]}
 
 
 def build_chat_subgraph() -> CompiledStateGraph:
