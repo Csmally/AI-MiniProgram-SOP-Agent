@@ -15,6 +15,7 @@ from typing import TypedDict
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.state import CompiledStateGraph
 
+from rich import print as rPrint
 
 class ExecutorAgentState(TypedDict):
     """检查执行 Agent 的状态 — 每个实例只处理一个检查项。"""
@@ -29,6 +30,11 @@ def execute_one_item(state: ExecutorAgentState) -> dict:
     """执行单个检查项（桩实现，Phase 4 替换为 minium 自动化）。"""
     item = state.get("check_item", {})
     batch_id = state.get("batch_id", "")
+
+    rPrint("[bold red]==========execute_one_item==========[/bold red]")
+    rPrint(state)
+    rPrint("[bold red]==========execute_one_item==========[/bold red]")
+
 
     time.sleep(0.5)  # 桩：模拟检查耗时，便于观察并行效果
 

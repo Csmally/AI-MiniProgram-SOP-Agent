@@ -10,7 +10,6 @@ from ..core.llm import get_llm, get_system_prompt
 from ..core.state import SessionPhase
 from ..sop.models import CheckItemList
 
-from rich import print as rPrint
 import json
 
 class SOPAgentState(MessagesState):
@@ -56,9 +55,6 @@ def generate_sop(state: SOPAgentState) -> dict:
         try:
             structured = llm.with_structured_output(CheckItemList, method="function_calling")
             result = structured.invoke(prompt)
-            rPrint("[bold magenta]==========generate_sop==========[/bold magenta]")
-            rPrint(result)
-            rPrint("[bold magenta]==========generate_sop==========[/bold magenta]")
             check_items = [i.model_dump() for i in result.check_items]
         except Exception:
             check_items = _generate_sop_fallback(llm, prompt)

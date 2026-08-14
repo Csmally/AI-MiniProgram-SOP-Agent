@@ -37,8 +37,6 @@ from ..sop.models import (
     StreamRunRequest,
 )
 
-from rich import print as rPrint
-
 router = APIRouter(prefix="/api")
 
 
@@ -119,9 +117,6 @@ def upload_prd(session_id: str, file: UploadFile = File(...)):
                 "messages": [HumanMessage(content=f"[上传 PRD: {file.filename}]")],
             },
         )
-        rPrint("[bold blue]==========parse_prd-返回结果==========[/bold blue]")
-        rPrint(result)
-        rPrint("[bold blue]==========parse_prd-返回结果==========[/bold blue]")
 
     return ParseResultResponse(
         session_id=session_id,

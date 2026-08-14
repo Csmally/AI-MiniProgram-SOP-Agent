@@ -59,5 +59,8 @@ def get_llm(task: str) -> ChatOpenAI:
         api_key=api_key,
         temperature=0.3 if task != "chat" else 0.7,
         max_tokens=4096,
+        # 无超时的 LLM 调用会让 SSE worker 线程永不结束（reload 时进程假死）
+        timeout=120,
+        max_retries=2,
         extra_body={"thinking": {"type": "disabled"}},
     )

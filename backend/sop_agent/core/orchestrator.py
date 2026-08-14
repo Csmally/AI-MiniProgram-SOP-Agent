@@ -58,10 +58,17 @@ def _get_pool() -> ConnectionPool:
 
 
 def close() -> None:
-    """关闭连接池与图实例（FastAPI lifespan 调用）。"""
+    """关闭连接池与图实例（FastAPI lifespan 调用）。
+
+    显式超时：等待连接归还最多 5s，避免 reload/关机时因 worker 线程
+    未结束而无限挂起（进程假死、端口被占）。
+    """
     global _pool, _graph
     if _pool is not None:
-        _pool.close()
+        try:
+            _pool.close(timeout=5)
+        except Exception:
+            pass  # 强制关闭场景下连接可能无法归还，忽略并退出
         _pool = None
     _graph = None
 
@@ -191,9 +198,9 @@ def stream_action(session_id: str, action: str, updates: Optional[dict] = None):
     kind: "updates"（graph.stream 的 {node: writes} chunk）/"done"（最终状态）。
     """
     payload: dict = {"next_action": action}
-    rPrint("[bold green]==========stream_action==========[/bold green]")
+    rPrint("[bold blue]==========stream_action==========[/bold blue]")
     rPrint(f'action:{action},updates:{updates}')
-    rPrint("[bold green]==========stream_action==========[/bold green]")
+    rPrint("[bold blue]==========stream_action==========[/bold blue]")
     if updates:
         payload.update(updates)
     for chunk in get_graph().stream(payload, _thread_config(session_id), stream_mode="updates"):

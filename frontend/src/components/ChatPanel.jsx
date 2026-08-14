@@ -86,9 +86,9 @@ export default function ChatPanel({ messages, onSend, onUploadPrd, loading, phas
             生成检查清单
           </button>
         )}
-        {(phase === 'sop_generated' || phase === 'ready') && (
+        {phase === 'completed' && (
           <button className="btn-action btn-primary" onClick={onRunChecks} disabled={loading || !canRun}>
-            开始检查
+            重新检查
           </button>
         )}
       </div>
