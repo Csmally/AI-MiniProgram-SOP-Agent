@@ -25,9 +25,18 @@ export function useSession() {
       setMessages(data.messages || []);
       setAgentProgress({});
       if (data.report_content) {
+        // 刷新恢复时同样从 check_results 统计，与 SSE done 事件的口径一致
+        const results = data.check_results || [];
+        const passed = results.filter(r => r.status === 'passed').length;
+        const failed = results.filter(r => r.status === 'failed').length;
         setReport({
           report_content: data.report_content,
-          summary: { total: data.check_results?.length || 0, passed: 0, failed: 0, pass_rate: 'N/A' },
+          summary: {
+            total: results.length,
+            passed,
+            failed,
+            pass_rate: results.length ? `${Math.round((passed / results.length) * 100)}%` : 'N/A',
+          },
         });
       }
     } finally {
@@ -73,8 +82,22 @@ export function useSession() {
 
   const deleteSession = useCallback(async (sid) => {
     await api.deleteSession(sid);
-    await refreshSessions();
-  }, [refreshSessions]);
+    const list = await refreshSessions();
+    // 删的是当前会话：自动切到剩余最新会话；没有剩余则清空 UI 状态
+    if (sid === sessionId) {
+      if (list.length > 0) {
+        await load(list[0].session_id);
+      } else {
+        setSessionId(null);
+        setPhase('idle');
+        setFeatures([]);
+        setCheckItems([]);
+        setMessages([]);
+        setReport(null);
+        setAgentProgress({});
+      }
+    }
+  }, [refreshSessions, sessionId, load]);
 
   // SSE 事件统一处理：phase 与结果一律以服务端 checkpoint 为准
   const handleRunEvent = useCallback((event) => {

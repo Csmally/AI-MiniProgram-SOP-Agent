@@ -191,6 +191,9 @@ def stream_action(session_id: str, action: str, updates: Optional[dict] = None):
     kind: "updates"（graph.stream 的 {node: writes} chunk）/"done"（最终状态）。
     """
     payload: dict = {"next_action": action}
+    rPrint("[bold green]==========stream_action==========[/bold green]")
+    rPrint(f'action:{action},updates:{updates}')
+    rPrint("[bold green]==========stream_action==========[/bold green]")
     if updates:
         payload.update(updates)
     for chunk in get_graph().stream(payload, _thread_config(session_id), stream_mode="updates"):

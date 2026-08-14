@@ -9,9 +9,9 @@
 
 import enum
 import operator
-from typing import Annotated, Optional, TypedDict
+from typing import Annotated, Optional
 
-from langgraph.graph.message import add_messages
+from langgraph.graph import MessagesState
 from langchain_core.messages import AIMessage
 
 
@@ -24,11 +24,10 @@ class SessionPhase(str, enum.Enum):
     COMPLETED = "completed"
 
 
-class MainGraphState(TypedDict):
-    """主图状态 — 各 Agent 子图 schema 均为其子集。"""
+class MainGraphState(MessagesState):
+    """主图状态 — 继承 messages（add_messages reducer），各 Agent 子图 schema 均为其子集。"""
 
     session_id: str
-    messages: Annotated[list, add_messages]
     prd_content: str
     features: list[dict]
     check_items: list[dict]
