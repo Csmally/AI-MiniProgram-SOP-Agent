@@ -9,7 +9,7 @@
 
 import enum
 import operator
-from typing import Annotated, Optional
+from typing import Annotated
 
 from langgraph.graph import MessagesState
 from langchain_core.messages import AIMessage
@@ -36,10 +36,11 @@ class MainGraphState(MessagesState):
     agent_progress: Annotated[list, operator.add]      # Agent 进度事件，永不清空
     report_content: str                                # report_agent 写入
     run_id: str                                        # dispatch 写入；collect/前端按此过滤
+    exec_cursor: int                                   # 本轮执行游标（当前待执行检查项下标，串行循环用）
     current_phase: str
     approval: str
     next_action: str                                   # 操作入口路由指令
-    error: Optional[str]
+    error: str | None
 
 
 def create_initial_state(session_id: str) -> dict:
@@ -57,6 +58,7 @@ def create_initial_state(session_id: str) -> dict:
         "agent_progress": [],
         "report_content": "",
         "run_id": "",
+        "exec_cursor": 0,
         "current_phase": SessionPhase.IDLE.value,
         "approval": "pending",
         "next_action": "",

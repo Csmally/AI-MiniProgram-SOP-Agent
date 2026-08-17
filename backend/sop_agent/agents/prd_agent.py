@@ -1,7 +1,5 @@
 """PRD 解析 Agent — 解析需求文档，提取功能列表。"""
 
-from typing import Optional
-
 from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.graph.state import CompiledStateGraph
 from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
@@ -18,7 +16,7 @@ class PRDAgentState(MessagesState):
     prd_content: str
     features: list[dict]
     current_phase: str
-    error: Optional[str]
+    error: str | None
 
 
 def parse_prd(state: PRDAgentState) -> dict:

@@ -1,7 +1,7 @@
 """Pydantic 数据模型 — Feature、CheckItem、API 请求/响应。"""
 
 import uuid
-from typing import Literal, Optional
+from typing import Literal
 from pydantic import BaseModel, Field
 
 
@@ -31,7 +31,7 @@ class CheckItem(BaseModel):
     status: Literal["pending", "running", "passed", "failed", "skipped"] = Field(
         "pending", description="执行状态"
     )
-    result_detail: Optional[str] = Field(None, description="结果详情")
+    result_detail: str | None = Field(None, description="结果详情")
     screenshots: list[str] = Field(default_factory=list, description="截图文件名列表")
 
 
@@ -50,6 +50,15 @@ class CheckItemList(BaseModel):
     check_items: list[CheckItem]
 
 
+class CheckResult(BaseModel):
+    """单个检查项的执行判定（executor agent 结构化输出）。
+
+    screenshots 由工具层收集，不由 LLM 生成。
+    """
+    status: Literal["passed", "failed"]
+    result_detail: str
+
+
 # -----------------------------
 # API 请求模型
 # -----------------------------
@@ -61,10 +70,10 @@ class ChatRequest(BaseModel):
 
 class UpdateCheckItemRequest(BaseModel):
     """修改检查项的请求体。"""
-    description: Optional[str] = None
-    priority: Optional[Literal["critical", "high", "medium", "low"]] = None
-    check_steps: Optional[list[str]] = None
-    expected_result: Optional[str] = None
+    description: str | None = None
+    priority: Literal["critical", "high", "medium", "low"] | None = None
+    check_steps: list[str] | None = None
+    expected_result: str | None = None
 
 
 class CreateCheckItemRequest(BaseModel):
@@ -95,7 +104,7 @@ class SessionResponse(BaseModel):
 class StreamRunRequest(BaseModel):
     """SSE 流式执行请求（run/approve 等操作）。"""
     next_action: str = "run"
-    approval: Optional[str] = None
+    approval: str | None = None
 
 
 class ParseResultResponse(BaseModel):

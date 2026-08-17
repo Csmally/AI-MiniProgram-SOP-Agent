@@ -18,6 +18,7 @@ dependencies = [
     "pyyaml>=6.0.3",
     "langgraph-checkpoint-postgres>=3.1.2",
     "rich>=15.0.0",
+    "minium>=1.6.0",
 ]
 
 [tool.setuptools.packages.find]
@@ -33,3 +34,7 @@ dev = [
 [build-system]
 requires = ["setuptools>=75.0"]
 build-backend = "setuptools.build_meta"
+
+[tool.pytest.ini_options]
+pythonpath = ["backend"]
+testpaths = ["backend/tests"]

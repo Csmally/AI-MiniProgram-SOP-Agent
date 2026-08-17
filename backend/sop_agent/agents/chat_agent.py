@@ -7,7 +7,7 @@
 """
 
 import threading
-from typing import Callable, Optional
+from typing import Callable
 
 from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.graph.state import CompiledStateGraph
@@ -72,7 +72,7 @@ def chat(state: ChatAgentState) -> dict:
     llm = get_llm("chat")
     prompt = _build_prompt(history, question)
 
-    hook: Optional[Callable[[str], None]] = getattr(_stream_local, "hook", None)
+    hook: Callable[[str], None] | None = getattr(_stream_local, "hook", None)
     if hook is not None:
         # 流式：逐 token 推送，同时累积完整回复（最终以完整消息落盘）
         full_reply = ""

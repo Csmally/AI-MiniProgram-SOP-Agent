@@ -3,27 +3,28 @@
 图结构（所有操作唯一入口 = START 路由器，按 next_action 分发）:
 
     START ──router──▶
-      upload_prd   → parse_prd(子图Agent) → generate_sop(子图Agent) → review_list [interrupt]
+      upload_prd   → parse_prd(子图Agent) → END（phase=prd_uploaded）
       generate_sop → generate_sop(子图Agent) → review_list [interrupt]
-      approve/run  → dispatch → fan_out[Send] → execute_item ×N(并行子图Agent)
+      approve/run  → dispatch → execute_agent（串行循环，游标驱动）
                      → collect → generate_report(子图Agent) → END
       chat         → chat_agent(子图Agent) → END
 
 关键设计（已在 langgraph 1.2.11 验证）:
 - 一切操作走 input-only invoke：fresh run 从 START 执行，自动丢弃旧 pending 中断；
-- Send 并行写必须用 reducer 通道（exec_results / agent_progress 用 operator.add）；
+- 执行串行化：微信开发者工具单实例约束，execute_agent 以条件边自循环逐项执行；
+- reducer 通道（exec_results / agent_progress 用 operator.add）支持循环内增量写；
 - update_state 必须显式 as_node=START（新线程建首个 checkpoint；已有线程
   不报 Ambiguous 且不影响 pending）；
 - PostgresSaver 用 psycopg_pool.ConnectionPool（线程安全，SSE worker 线程共享）。
 """
 
 import uuid
-from typing import Literal, Optional
+from typing import Literal
 
 from psycopg_pool import ConnectionPool
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.state import CompiledStateGraph
-from langgraph.types import Send, interrupt
+from langgraph.types import interrupt
 from langgraph.checkpoint.postgres import PostgresSaver
 
 from .state import MainGraphState, SessionPhase
@@ -33,6 +34,7 @@ from ..agents.sop_agent import build_sop_subgraph
 from ..agents.chat_agent import build_chat_subgraph
 from ..agents.executor_agent import build_executor_subgraph
 from ..agents.report_agent import build_report_subgraph
+from ..tools import minium_session
 
 from rich import print as rPrint
 
@@ -40,8 +42,8 @@ from rich import print as rPrint
 # 连接池 / 图实例
 # ──────────────────────────────────────────────
 
-_pool: Optional[ConnectionPool] = None
-_graph: Optional[CompiledStateGraph] = None
+_pool: ConnectionPool | None = None
+_graph: CompiledStateGraph | None = None
 
 
 def _get_pool() -> ConnectionPool:
@@ -71,6 +73,7 @@ def close() -> None:
             pass  # 强制关闭场景下连接可能无法归还，忽略并退出
         _pool = None
     _graph = None
+    minium_session.dispose()
 
 
 # ──────────────────────────────────────────────
@@ -96,20 +99,19 @@ def review_list(state: MainGraphState) -> dict:
 
 
 def dispatch(state: MainGraphState) -> dict:
-    """执行前：标记本轮 run_id 并进入 running 阶段。"""
+    """执行前：标记本轮 run_id、进入 running 阶段、游标归零。"""
     return {
         "run_id": uuid.uuid4().hex[:8],
         "current_phase": SessionPhase.RUNNING.value,
+        "exec_cursor": 0,
     }
 
 
-def fan_out(state: MainGraphState) -> list[Send]:
-    """按检查项 fan-out：每项一个并行 execute_item Agent。"""
-    run_id = state.get("run_id", "")
-    return [
-        Send("execute_item", {"check_item": item, "batch_id": run_id})
-        for item in state.get("check_items", [])
-    ]
+def should_continue(state: MainGraphState) -> Literal["execute_agent", "collect"]:
+    """执行游标未到头 → 继续下一项（串行，DevTools 单实例约束）；到头 → collect 汇总。"""
+    cursor = state.get("exec_cursor", 0)
+    total = len(state.get("check_items", []))
+    return "execute_agent" if cursor < total else "collect"
 
 
 def collect(state: MainGraphState) -> dict:
@@ -127,11 +129,11 @@ def build_graph() -> CompiledStateGraph:
     """构建并编译主图（Postgres checkpointer + 连接池）。"""
     workflow = StateGraph(MainGraphState)
 
-    # 5 个 Agent 子图节点
+    # 5 个 Agent 子图节点（executor 为单节点子图；串行循环见 should_continue）
     workflow.add_node("parse_prd", build_prd_subgraph())
     workflow.add_node("generate_sop", build_sop_subgraph())
     workflow.add_node("chat_agent", build_chat_subgraph())
-    workflow.add_node("execute_item", build_executor_subgraph())
+    workflow.add_node("execute_agent", build_executor_subgraph())
     workflow.add_node("generate_report", build_report_subgraph())
     # 主图控制节点
     workflow.add_node("review_list", review_list)
@@ -151,9 +153,12 @@ def build_graph() -> CompiledStateGraph:
     workflow.add_edge("review_list", END)
     workflow.add_edge("chat_agent", END)
 
-    # 执行流水线：fan-out → 并行 execute_item → collect → report
-    workflow.add_conditional_edges("dispatch", fan_out)
-    workflow.add_edge("execute_item", "collect")
+    # 执行流水线：dispatch → 串行循环 execute_agent（游标驱动）→ collect → report
+    workflow.add_edge("dispatch", "execute_agent")
+    workflow.add_conditional_edges(
+        "execute_agent", should_continue,
+        {"execute_agent": "execute_agent", "collect": "collect"},
+    )
     workflow.add_edge("collect", "generate_report")
     workflow.add_edge("generate_report", END)
 
@@ -178,7 +183,7 @@ def _thread_config(session_id: str) -> dict:
 # 对外统一操作 API
 # ──────────────────────────────────────────────
 
-def invoke_action(session_id: str, action: str, updates: Optional[dict] = None) -> dict:
+def invoke_action(session_id: str, action: str, updates: dict | None = None) -> dict:
     """统一操作入口：input-only invoke → START 路由器（fresh run，自动丢弃 pending）。
 
     返回执行后的最新 checkpoint 状态。
@@ -192,17 +197,17 @@ def invoke_action(session_id: str, action: str, updates: Optional[dict] = None) 
     return get_graph().invoke(payload, _thread_config(session_id))
 
 
-def stream_action(session_id: str, action: str, updates: Optional[dict] = None):
+def stream_action(session_id: str, action: str, updates: dict | None = None):
     """SSE worker 线程消费的生成器：逐事件产出 (kind, data)。
 
     kind: "updates"（graph.stream 的 {node: writes} chunk）/"done"（最终状态）。
     """
     payload: dict = {"next_action": action}
-    rPrint("[bold blue]==========stream_action==========[/bold blue]")
-    rPrint(f'action:{action},updates:{updates}')
-    rPrint("[bold blue]==========stream_action==========[/bold blue]")
     if updates:
         payload.update(updates)
+    rPrint("[bold blue]==========stream_action==========[/bold blue]")
+    rPrint(f'action:{payload},updates:{payload}')
+    rPrint("[bold blue]==========stream_action==========[/bold blue]")
     for chunk in get_graph().stream(payload, _thread_config(session_id), stream_mode="updates"):
         yield ("updates", chunk)
     final = get_graph().get_state(_thread_config(session_id))
@@ -221,7 +226,7 @@ def update_state(session_id: str, values: dict) -> dict:
     return st.values if st else {}
 
 
-def get_session_state(session_id: str) -> Optional[dict]:
+def get_session_state(session_id: str) -> dict | None:
     """从 checkpointer 读取会话最新状态（纯读取，不触发任何节点）。"""
     graph = get_graph()
     checkpoint = graph.get_state(_thread_config(session_id))

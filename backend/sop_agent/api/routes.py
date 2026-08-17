@@ -406,7 +406,7 @@ def _extract_events(chunk: dict) -> list[dict]:
                     "type": "phase", "phase": writes["current_phase"],
                     "run_id": writes.get("run_id", ""),
                 })
-        elif node == "execute_item":
+        elif node == "execute_agent":
             for p in writes.get("agent_progress", []):
                 events.append({
                     "type": "item",

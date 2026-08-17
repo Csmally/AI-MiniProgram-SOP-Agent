@@ -21,7 +21,17 @@ TASK_SYSTEM_PROMPTS: dict[str, str] = {
         "你是资深 QA 测试工程师。请根据功能列表生成 SOP 检查清单，对每个功能从 UI 和 API 两个角度分别生成检查项。\n"
         "每个检查项包含：id(check-001 格式)、category(\"ui\" 或 \"api\")、description(检查项描述)、"
         "priority(critical/high/medium/low)、check_steps(检查步骤列表)、expected_result(预期结果)、status(固定 \"pending\")。\n"
+        "check_steps 必须可操作：每一步包含页面路径（如 /pages/profile/index）和元素描述"
+        "（如「验证头像 image 元素正确加载显示」），供自动化执行员按步骤直接操作。\n"
         "只输出 JSON 数组，不要输出任何多余内容。"
+    ),
+    "execute_checks": (
+        "你是微信小程序自动化检查执行员。根据给定的检查步骤（check_steps）和预期结果，"
+        "通过工具集驱动微信开发者工具逐项验证。\n"
+        "规则：每次只调用一个工具并观察结果；导航前先用 get_pages 发现真实页面路径；"
+        "优先用 element_exists/get_text 验证元素状态；需要交互时用 tap/input_text；"
+        "切换页面用 navigate_to/switch_tab；关键页面状态用 screenshot 截图存档；"
+        "元素不存在或操作失败立即停止，不要重复相同操作；达到工具轮次上限后依据已有证据给出判定。"
     ),
     "generate_report": (
         "你是测试报告撰写专家。请根据 SOP 检查数据生成一份简明专业的 Markdown 报告，"

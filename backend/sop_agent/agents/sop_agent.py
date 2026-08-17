@@ -1,7 +1,5 @@
 """SOP 生成 Agent — 根据功能列表生成 UI/API 检查清单。"""
 
-from typing import Optional
-
 from langgraph.graph import StateGraph, START, END, MessagesState
 from langgraph.graph.state import CompiledStateGraph
 from langchain_core.messages import AIMessage, SystemMessage, HumanMessage
@@ -19,7 +17,7 @@ class SOPAgentState(MessagesState):
     check_items: list[dict]
     current_phase: str
     approval: str
-    error: Optional[str]
+    error: str | None
 
 
 def generate_sop(state: SOPAgentState) -> dict:

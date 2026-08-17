@@ -51,9 +51,17 @@ class Settings:
         }
 
     # ─────────────────────────────────────
-    # 微信开发者工具
+    # 微信开发者工具（minium 自动化）
     # ─────────────────────────────────────
     MINIUM_PROJECT_PATH: str = _env("MINIUM_PROJECT_PATH")
+    MINIUM_DEV_TOOL_PATH: str = _env("MINIUM_DEV_TOOL_PATH")
+    MINIUM_TEST_PORT: int = int(_env("MINIUM_TEST_PORT", "9420"))
+
+    @property
+    def MINIUM_ENABLED(self) -> bool:
+        """minium 是否启用：所有配置都配好才启用——
+        MINIUM_ENABLED=true 显式启用；项目路径与 DevTools 路径任一缺失即不启用。"""
+        return _env("MINIUM_ENABLED").lower() == "true" and bool(self.MINIUM_PROJECT_PATH) and bool(self.MINIUM_DEV_TOOL_PATH)
 
     # ─────────────────────────────────────
     # 服务
