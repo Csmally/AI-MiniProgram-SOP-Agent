@@ -51,19 +51,11 @@ class Settings:
         }
 
     # ─────────────────────────────────────
-    # 微信开发者工具（minium 自动化，已弃用待清理）
+    # 微信开发者工具（minium 自动化）
     # ─────────────────────────────────────
     MINIUM_PROJECT_PATH: str = _env("MINIUM_PROJECT_PATH")
     MINIUM_DEV_TOOL_PATH: str = _env("MINIUM_DEV_TOOL_PATH")
     MINIUM_TEST_PORT: int = int(_env("MINIUM_TEST_PORT", "9420"))
-
-    # ─────────────────────────────────────
-    # 小程序自动化（automator sidecar，现行）
-    # ─────────────────────────────────────
-    AUTOMATOR_SIDECAR_URL: str = _env("AUTOMATOR_SIDECAR_URL", "http://127.0.0.1:9310")
-    AUTOMATOR_PROJECT_PATH: str = _env("AUTOMATOR_PROJECT_PATH")
-    AUTOMATOR_CLI_PATH: str = _env("AUTOMATOR_CLI_PATH")
-    AUTOMATOR_PORT: int = int(_env("AUTOMATOR_PORT", "9420"))
 
     # ─────────────────────────────────────
     # 本地 LLM（llama.cpp，可选）

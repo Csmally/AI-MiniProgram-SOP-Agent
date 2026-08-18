@@ -19,9 +19,6 @@ sessions/
 frontend/node_modules/
 frontend/dist/
 
-# 后端
-sidecar/node_modules/
-
 # OS
 .DS_Store
 Thumbs.db

@@ -31,7 +31,7 @@ def _item(item_id="c1"):
     }
 
 
-def test_stub_mode(automator_unavailable):
+def test_stub_mode(minium_unavailable):
     """桩模式：无网络，断言 [桩] passed + 游标推进 + 进度事件。"""
     out = execute_one_item(_state([_item()]))
 
@@ -43,7 +43,7 @@ def test_stub_mode(automator_unavailable):
     assert progress["item_id"] == "c1" and progress["status"] == "passed"
 
 
-def test_empty_checklist_guard(automator_unavailable):
+def test_empty_checklist_guard(minium_unavailable):
     """空清单守卫：不执行，游标保持 0（滑入 collect）。"""
     out = execute_one_item(_state([]))
     assert out["exec_cursor"] == 0
@@ -87,7 +87,6 @@ def test_clean_history_pads_unfulfilled_tool_calls():
 
 
 @needs_key
-@pytest.mark.skip(reason="automator 入口替换中：fake minium 注入已不生效，待 automator fake 就绪后恢复")
 def test_real_mode_with_fake_minium(fake_session):
     """集成：fake minium + 真实 LLM 跑通一个检查项的完整 agent 循环。"""
     from sop_agent.agents import executor_agent

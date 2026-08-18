@@ -28,19 +28,8 @@ def fake_session(tmp_path):
 
 
 @pytest.fixture
-def automator_unavailable():
-    """强制 automator_session.is_available=False（桩模式路径）。"""
-    from sop_agent.tools import automator_session
-
-    original = automator_session.is_available
-    automator_session.is_available = lambda: False
-    yield
-    automator_session.is_available = original
-
-
-@pytest.fixture
 def minium_unavailable():
-    """（旧）强制 minium is_available=False；executor 门槛已切 automator，保留待清理。"""
+    """强制 minium_session.is_available=False（桩模式路径）。"""
     from sop_agent.tools import minium_session
 
     original = minium_session.is_available

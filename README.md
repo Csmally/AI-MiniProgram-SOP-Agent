@@ -1,6 +1,6 @@
 # 微信小程序 SOP Agent
 
-微信小程序新版本上线前的**新增功能 SOP（标准操作流程）自动化检查 Agent**。用户上传 PRD 需求文档，Agent 自动解析功能信息、生成结构化检查清单，并通过 miniprogram-automator 驱动微信开发者工具执行 UI/交互 + 接口/数据验证。
+微信小程序新版本上线前的**新增功能 SOP（标准操作流程）自动化检查 Agent**。用户上传 PRD 需求文档，Agent 自动解析功能信息、生成结构化检查清单，并通过 minium 驱动微信开发者工具执行 UI/交互 + 接口/数据验证。
 
 详细计划见 [PLAN.md](PLAN.md)。
 
@@ -12,17 +12,17 @@
 | 后端 | FastAPI + LangGraph + LangChain |
 | AI | DeepSeek-V4-Pro / DeepSeek-V4-Flash / Qwen3.7-Flash |
 | 持久化 | PostgreSQL（LangGraph PostgresSaver） |
-| 小程序自动化 | miniprogram-automator（Node sidecar 桥接微信开发者工具） |
-| 包管理 | uv (Python) + npm（前端 / sidecar） |
+| 小程序自动化 | minium（Python 直连微信开发者工具） |
+| 包管理 | uv (Python) + npm（前端） |
 
 ## 前置条件
 
 1. **Python 3.13+** 和 [uv](https://docs.astral.sh/uv/)
-2. **Node.js 20+** 和 npm（前端与 sidecar 依赖）
+2. **Node.js 20+** 和 npm（前端依赖）
 3. **PostgreSQL** 已运行，并创建数据库
 4. **DeepSeek API Key**（必需）
 5. Qwen API Key（可选，截图分析用）
-6. **微信开发者工具**（自动化执行需要；无需手动开自动化端口，由后端懒拉起）
+6. **微信开发者工具**（自动化执行需要；需手动开启服务端口：设置 → 安全设置 → 服务端口）
 7. （可选）llama.cpp 本地大模型——不依赖云端 API 的替代方案（见下方「本地 LLM」）
 
 ## 安装
@@ -37,32 +37,20 @@ cp .env.example .env
 #   DEEPSEEK_API_KEY=sk-xxx
 #   QWEN_API_KEY=sk-xxx
 #   DATABASE_URL=postgresql://postgres:password@localhost:5432/sop_agent
+#   MINIUM_ENABLED=true
+#   MINIUM_PROJECT_PATH=C:/path/to/miniprogram/project
+#   MINIUM_DEV_TOOL_PATH=C:/Program Files (x86)/Tencent/微信web开发者工具/cli.bat
 
 # 3. 安装前端依赖
 cd frontend
-npm install
-
-# 4. 安装 sidecar 依赖（小程序自动化桥）
-cd sidecar
 npm install
 ```
 
 ## 启动
 
-### sidecar（终端 1，小程序自动化桥）
+> 启动前确认微信开发者工具已打开目标项目，并开启自动化服务端口（设置 → 安全设置 → 服务端口），否则检查项会报连接错误。
 
-```bash
-cd sidecar
-node server.js
-```
-
-- 监听 `http://127.0.0.1:9310`（可用 `.env` 的 `AUTOMATOR_SIDECAR_URL` 改）
-- 微信开发者工具**不用手动开**：后端首次调用自动化工具时自动懒拉起（首次调用会多花 10~20s）
-- 验证：`curl http://127.0.0.1:9310/health` → `{"ok":true,"connected":false}`（未执行过检查前 connected 为 false 属正常）
-
-> ⚠️ 迁移中：`navigate_to` / `switch_tab` / `get_pages` 已接入真实自动化；其余工具（tap / input_text / get_text / element_exists / screenshot）尚为占位实现，调用会返回 `[工具执行失败]`。
-
-### 后端（终端 2）
+### 后端（终端 1）
 
 ```bash
 uv run python -m sop_agent.main
@@ -73,7 +61,7 @@ uv run python -m sop_agent.main
 - 健康检查：`http://127.0.0.1:8000/health`
 - HOST / PORT / DEBUG 全部从 `.env` 读取，改配置不用改启动命令
 
-### 前端（终端 3）
+### 前端（终端 2）
 
 ```bash
 cd frontend
@@ -83,7 +71,7 @@ npm run dev
 - 浏览器打开：`http://localhost:5173`
 - Vite 已配置代理，`/api/*` 自动转发到后端 8000 端口
 
-### 本地 LLM（终端 4，可选）
+### 本地 LLM（终端 3，可选）
 
 本地部署 llama.cpp 视觉大模型（Qwen3.8-27B 多模态），替代云端 DeepSeek/Qwen API：
 
@@ -131,11 +119,8 @@ npm run dev
 │   │   └── config.py        # 配置管理
 │   ├── sop/models.py        # Pydantic 数据模型
 │   ├── tools/
-│   │   ├── automator_tools.py   # 8 个自动化工具（LLM 调用面）
-│   │   └── automator_session.py # sidecar HTTP 桥接（懒拉起 + 探活）
-├── sidecar/                 # Node sidecar：官方 miniprogram-automator 的 HTTP 封装
-│   ├── server.js            # 唯一 DevTools 自动化连接 + 导航/截图等端点
-│   └── package.json
+│   │   ├── minium_tools.py     # 8 个自动化工具（LLM 调用面）
+│   │   └── minium_session.py   # minium 会话单例（全局锁 + 自动重建）
 ├── frontend/
 │   └── src/
 │       ├── App.jsx
@@ -174,6 +159,6 @@ print(r.json()['message'])
 | 数据库连接失败 | 检查 `.env` 的 `DATABASE_URL`，确认 PostgreSQL 已启动 |
 | API Key 无效 | 检查 `.env` 的 `DEEPSEEK_API_KEY` 是否为真实 key |
 | 前端请求 500 | 查看后端终端日志定位错误 |
-| sidecar 不可达（端口 9310 连不上） | `cd sidecar && node server.js`；sidecar 缺失时 executor 自动降级桩 |
-| 检查项报「尚未连接微信开发者工具」 | 确认 sidecar 在跑 + `.env` 配了 `AUTOMATOR_PROJECT_PATH` / `AUTOMATOR_CLI_PATH`（懒拉起依赖这两项） |
-| 懒拉起报 CLI 路径错误 | 检查 `AUTOMATOR_CLI_PATH` 指向 `cli.bat` 真实路径（PITFALLS 9.1/9.2） |
+| 检查项带 `[桩]` 前缀 | minium 环境未配置（`MINIUM_ENABLED` / 两项路径），executor 自动降级桩 |
+| 连接报「IDE service port disabled」 | 开发者工具 → 设置 → 安全设置 → 服务端口 → 开启（PITFALLS 6.1） |
+| 元素查询超时 | 开发者工具「详情 → 本地设置 → 调试基础库」降到 3.16.1 及以下（PITFALLS 6.5） |

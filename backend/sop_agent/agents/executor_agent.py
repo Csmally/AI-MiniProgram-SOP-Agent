@@ -20,7 +20,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 
 from ..core.llm import get_llm, get_system_prompt
 from ..sop.models import CheckResult
-from ..tools import automator_session, automator_tools
+from ..tools import minium_session, minium_tools
 
 from rich import print as rPrint
 
@@ -63,18 +63,18 @@ def execute_one_item(state: ExecutorAgentState) -> dict:
     rPrint(item)
     rPrint(f"[bold blue]==========execute_one_item_abcd-{run_id}==========[/bold blue]")
 
-    automator_tools.set_run_context(
+    minium_tools.set_run_context(
         session_id=state.get("session_id", ""),
         run_id=run_id,
         item_id=item.get("id", ""),
     )
     try:
-        if automator_session.is_available():
-            result = _run_with_automator(item, run_id)   # 真实执行
+        if minium_session.is_available():
+            result = _run_with_minium(item, run_id)   # 真实执行
         else:
             result = _run_stub(item, run_id)          # 桩降级
     finally:
-        automator_tools.clear_run_context()
+        minium_tools.clear_run_context()
 
     return {
         "exec_cursor": cursor + 1,
@@ -102,14 +102,14 @@ def _run_stub(item: dict, run_id: str) -> dict:
     }
 
 
-def _run_with_automator(item: dict, run_id: str) -> dict:
-    """真实执行：LLM agent 循环驱动 automator 工具 + 结构化判定。
+def _run_with_minium(item: dict, run_id: str) -> dict:
+    """真实执行：LLM agent 循环驱动 minium 工具 + 结构化判定。
 
     异常隔离：连接断/LLM 异常 → 该项 failed + 错误详情，不中断整个 run。
     """
     screenshots: list[str] = []
     try:
-        llm_tools = get_llm("execute_checks").bind_tools(automator_tools.EXECUTOR_TOOLS)
+        llm_tools = get_llm("execute_checks").bind_tools(minium_tools.EXECUTOR_TOOLS)
         llm_plain = get_llm("execute_checks")
 
         messages: list[Any] = [
@@ -155,7 +155,7 @@ def _run_with_automator(item: dict, run_id: str) -> dict:
                 try:
                     # 新版 langchain-core 支持直接传 ToolCall dict：内部剥 args
                     # 并透传 tool_call_id，直接返回 ToolMessage
-                    out_msg = automator_tools.TOOL_MAP[tool_name].invoke(tc)
+                    out_msg = minium_tools.TOOL_MAP[tool_name].invoke(tc)
                 except Exception as e:
                     out_msg = ToolMessage(
                         content=f"[工具执行失败: {tool_name}] {e}",
