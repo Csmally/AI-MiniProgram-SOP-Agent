@@ -51,11 +51,27 @@ class Settings:
         }
 
     # ─────────────────────────────────────
-    # 微信开发者工具（minium 自动化）
+    # 微信开发者工具（minium 自动化，已弃用待清理）
     # ─────────────────────────────────────
     MINIUM_PROJECT_PATH: str = _env("MINIUM_PROJECT_PATH")
     MINIUM_DEV_TOOL_PATH: str = _env("MINIUM_DEV_TOOL_PATH")
     MINIUM_TEST_PORT: int = int(_env("MINIUM_TEST_PORT", "9420"))
+
+    # ─────────────────────────────────────
+    # 小程序自动化（automator sidecar，现行）
+    # ─────────────────────────────────────
+    AUTOMATOR_SIDECAR_URL: str = _env("AUTOMATOR_SIDECAR_URL", "http://127.0.0.1:9310")
+    AUTOMATOR_PROJECT_PATH: str = _env("AUTOMATOR_PROJECT_PATH")
+    AUTOMATOR_CLI_PATH: str = _env("AUTOMATOR_CLI_PATH")
+    AUTOMATOR_PORT: int = int(_env("AUTOMATOR_PORT", "9420"))
+
+    # ─────────────────────────────────────
+    # 本地 LLM（llama.cpp，可选）
+    # ─────────────────────────────────────
+    LOCAL_LLM_ENABLED: bool = _env("LOCAL_LLM_ENABLED").lower() == "true"
+    LOCAL_LLM_URL: str = _env("LOCAL_LLM_URL", "http://127.0.0.1:8080/v1")
+    LOCAL_LLM_MODEL: str = _env("LOCAL_LLM_MODEL", "Qwen3.8-27B-Q3_K_M.gguf")
+    LOCAL_LLM_API_KEY: str = _env("LOCAL_LLM_API_KEY", "local-any-value")
 
     @property
     def MINIUM_ENABLED(self) -> bool:
@@ -82,7 +98,14 @@ class Settings:
         """根据 model_key 获取 {model, base_url, api_key}。
 
         model_key 格式: <provider>-<variant>，如 deepseek-v4-pro。
+        LOCAL_LLM_ENABLED=true 时所有任务统一走本地 llama.cpp（README「本地 LLM」节）。
         """
+        if self.LOCAL_LLM_ENABLED:
+            return {
+                "model": self.LOCAL_LLM_MODEL,
+                "base_url": self.LOCAL_LLM_URL,
+                "api_key": self.LOCAL_LLM_API_KEY,
+            }
         if model_key.startswith("deepseek"):
             return {
                 "model": (
@@ -93,11 +116,6 @@ class Settings:
                 "base_url": self.DEEPSEEK_LLM_URL,
                 "api_key": self.DEEPSEEK_API_KEY,
             }
-            # return {
-            #     "model": "Qwen3.8-27B-Q3_K_M.gguf",
-            #     "base_url": "http://127.0.0.1:8080/v1",
-            #     "api_key": "xxxx-aaa",
-            # }
         elif model_key.startswith("qwen"):
             return {
                 "model": self.QWEN3_7_FLASH_MODEL_NAME,

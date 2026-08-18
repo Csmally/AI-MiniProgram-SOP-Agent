@@ -1,7 +1,7 @@
 # 开发坑点记录（PITFALLS）
 
 > 本项目开发中踩过的坑、根因与解决方案。**每解决一个新坑就往这里补一条**，避免重复踩。
-> 格式：现象 → 根因 → 方案。最后更新：2026-08-14。
+> 格式：现象 → 根因 → 方案。最后更新：2026-08-18。
 
 ## 目录
 
@@ -13,6 +13,7 @@
 6. [minium（微信小程序自动化）](#6-minium微信小程序自动化)
 7. [结构化输出](#7-结构化输出)
 8. [测试与调试](#8-测试与调试)
+9. [automator / sidecar（小程序自动化桥）](#9-automator--sidecar小程序自动化桥)
 
 ---
 
@@ -228,3 +229,38 @@
 ### 8.3 E2E 前先杀干净旧实例
 - **坑**：残留旧代码实例响应请求 → 测试「通过」但测的不是新代码（本项目至少踩了 3 次）
 - **方案**：每次 E2E 前 `netstat` 验证端口归属 + 确认进程启动时间；后台服务统一用 `DEBUG=false` 手动管理
+
+## 9. automator / sidecar（小程序自动化桥）
+
+> 2026-08-18 起弃用 minium（元素查询对 Taro 运行时超时无解，见 6.5），改官方 miniprogram-automator（Node）：
+> sidecar/ 目录 HTTP 服务持官方包 + 唯一 DevTools 自动化连接，Python 后端走 httpx 调用。
+
+### 9.1 automator.launch 官方实现在 Windows 新 Node 上 spawn cli.bat 报 EINVAL
+- **现象**：`automator.launch({cliPath: "E:/.../cli.bat"})` 报 `Failed to launch wechat web devTools, please make sure cliPath is correctly specified`；最小复现 `spawn("cli.bat")` 直接抛 `spawn EINVAL`（Node v24 实测）
+- **根因**：Windows 下 Node 的 child_process 不能直接执行 .bat（CreateProcess 不认批处理），官方 Launcher 裸 spawn 且不支持 shell 选项
+- **方案**：sidecar 不用 automator.launch，自实现 launch（见 9.2/9.3）：spawn DevTools 自带 node.exe 跑 cli.js + 轮询 `automator.connect({wsEndpoint})`
+
+### 9.2 经 cmd.exe 执行 cli.bat 有中文路径 GBK 坑
+- **现象**：`spawn(comspec, ['/c', 'E:/微信web开发者工具/cli.bat', ...])` 报「系统找不到指定的路径」（stderr 是 GBK，显示为乱码 `ϵͳ�Ҳ���ָ����·����`）；bash 手动 `cmd //c` 同样命令却通
+- **根因**：cmd.exe 解析 Unicode 参数时按控制台代码页（GBK）转换，中文路径经 Node spawn → cmd 传递被转坏
+- **方案**：绕开 bat 和 cmd 两层——cli.bat 本体只是 `"%~dp0.\node.exe" "%~dp0.\cli.js" %*` 的包装，直接 `spawn(cli目录/node.exe, [cli目录/cli.js, ...])`，编码雷全消
+
+### 9.3 CLI auto 命令 fire-and-forget，stderr 是 GBK
+- **现象**：`cli auto --project <路径> --auto-port <端口>` 很快 EXIT 0（DevTools 后台继续跑），stdout 为空；stderr 有进度输出但 GBK 乱码
+- **根因**：CLI 只负责拉起/复用 IDE 实例并开启自动化端口，自身不驻留；stderr 按系统代码页输出。DevTools 已在跑时会复用实例（输出 `IDE may already started ... trying to connect`）
+- **方案**：spawn 后不看退出码判成败，轮询连 `ws://127.0.0.1:<port>`（`automator.connect` 成功即 launch 成功）；stderr 仅捕获用于超时报错兜底（乱码不影响判断）
+
+### 9.4 Git Bash 的 curl 发中文请求体是 GBK 编码
+- **现象**：curl 发含中文路径的 JSON（如 cliPath）到 sidecar，服务端按 UTF-8 解析出乱码（`微信web开发者工具` → `΢��web�����߹���`）→ 路径不存在 → 间接报 `spawn EINVAL`；node fetch / httpx 发同样内容完全正常
+- **根因**：Git Bash 下 curl 的命令行参数按 Windows 控制台代码页（GBK）发出，不是 UTF-8
+- **方案**：**测试工具陷阱，非代码问题**——验证 sidecar 一律用 node fetch 或 httpx（真实客户端就是 httpx，天然 UTF-8）。调试时看到「路径不存在/找不到」类报错，先怀疑编码再看路径
+
+### 9.5 导航类型错配会抛未捕获异常并断开自动化通道
+- **现象**：`switchTab` 跳非 tabBar 页（或 `navigateTo` 跳 tabBar 页）报 `Uncaught [object Object]`，随后整个自动化连接 `Connection closed`（后续所有调用全挂）
+- **根因**：该 app 的 wx 代理对契约违例直接抛未捕获异常，小程序 JS 上下文崩溃 → IDE 关闭自动化通道；自动化端口本身还活着（重连可用），但连接已死
+- **方案**：sidecar `/navigate` 调 wx 前按 app.json 预校验（switchTab↔tabBar 列表、navigateTo↔已注册页面、类型↔页面类别），契约违例挡在调用前返回友好文本；底层 ws 断开由 `watchDisconnect` 检测 + `ensureMini` 下次调用自动重连兜底
+
+### 9.6 导航的固定等待不靠谱：首访慢加载 + 初始化吞调用
+- **现象**：① automator 的 changeRoute 固定 sleep 3s 后读落地页，Taro 页面首访加载超 3s → 返回旧页（导航实际成功了，只是读早了）；② launch 后第一次导航调用被 app 静默吞掉（初始化未就绪，无 success 也无 fail 回调），轮询 15s 页面纹丝不动，但稍后重试立即成功
+- **根因**：① 固定等待没有落地确认；② app 初始化窗口内的 wx 调用静默丢失
+- **方案**：sidecar 自实现 `navigateAndWait`：每 5s 重发一次调用 + 轮询 currentPage 直到落地目标页（20s 总超时）；`navigateTo` 重发前查 `pageStack`——目标已在栈中（加载中）则只等不重复 push，避免页面栈堆重复页

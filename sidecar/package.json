@@ -1,0 +1,13 @@
+{
+  "name": "sop-agent-sidecar",
+  "version": "0.1.0",
+  "private": true,
+  "description": "miniprogram-automator HTTP sidecar — 后端 FastAPI 与微信开发者工具自动化端口之间的桥",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "miniprogram-automator": "^0.12.1"
+  }
+}
