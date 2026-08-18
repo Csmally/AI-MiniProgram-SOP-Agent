@@ -132,10 +132,12 @@ def _run_with_minium(item: dict, run_id: str) -> dict:
                 messages.append(HumanMessage(content="已达到单项时间上限，请基于已有证据给出判定。"))
                 break
 
-            rPrint(f"[bold red]==========调用大模型==========[/bold red]")
-            resp = llm_tools.invoke(messages)
+            rPrint(f"[bold red]==========调用大模型-开始==========[/bold red]")
 
+            resp = llm_tools.invoke(messages)
             resp.pretty_print()
+
+            rPrint(f"[bold red]==========调用大模型-结束==========[/bold red]")
 
             messages.append(resp)
             if not resp.tool_calls:
@@ -147,6 +149,9 @@ def _run_with_minium(item: dict, run_id: str) -> dict:
             tool_calls_total += len(resp.tool_calls)
             for tc in resp.tool_calls:
                 tool_name = tc.get("name", "")
+
+                rPrint(f"[bold green]==========调用工具-{tool_name}==========[/bold green]")
+
                 try:
                     # 新版 langchain-core 支持直接传 ToolCall dict：内部剥 args
                     # 并透传 tool_call_id，直接返回 ToolMessage
