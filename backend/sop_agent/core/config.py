@@ -93,6 +93,11 @@ class Settings:
                 "base_url": self.DEEPSEEK_LLM_URL,
                 "api_key": self.DEEPSEEK_API_KEY,
             }
+            # return {
+            #     "model": "Qwen3.8-27B-Q3_K_M.gguf",
+            #     "base_url": "http://127.0.0.1:8080/v1",
+            #     "api_key": "xxxx-aaa",
+            # }
         elif model_key.startswith("qwen"):
             return {
                 "model": self.QWEN3_7_FLASH_MODEL_NAME,

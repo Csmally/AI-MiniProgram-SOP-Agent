@@ -51,15 +51,9 @@ def navigate_to(page_path: str) -> str:
     """导航到指定普通页面用这个工具，如果是tabBar页面用switch_tab工具。page_path: 页面路径（如 pages/index/index，可带或不带前导斜杠）。失败时返回可读错误文本。"""
     def act(s):
         s.app.navigate_to("/" + _normalize_path(page_path), None)
-        return 'navigate_to跳转成功'
+        return '普通页面导航跳转成功'
 
-    res = _run(act)
-
-    rPrint(f"[bold red]==========工具调用结果realy-navigate_to==========[/bold red]")
-    rPrint(res)
-    rPrint(f"[bold red]==========工具调用结果realy-navigate_to==========[/bold red]")
-
-    return res
+    return _run(act)
 
 
 @tool
@@ -68,15 +62,9 @@ def switch_tab(tab_path: str) -> str:
     def act(s):
         # 归一化：无论 LLM 传 /pages/x、pages/x 还是 //pages/x，保证恰好一个前导斜杠
         s.app.switch_tab("/" + _normalize_path(tab_path))
-        return 'switch_tab跳转成功'
+        return 'tabBar页面导航跳转成功'
 
-    res = _run(act)
-
-    rPrint(f"[bold red]==========工具调用结果-navigate_to==========[/bold red]")
-    rPrint(res)
-    rPrint(f"[bold red]==========工具调用结果-navigate_to==========[/bold red]")
-
-    return res
+    return _run(act)
 
 
 @tool
