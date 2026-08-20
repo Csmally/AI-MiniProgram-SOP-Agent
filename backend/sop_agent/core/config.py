@@ -98,17 +98,17 @@ class Settings:
                 "base_url": self.LOCAL_LLM_URL,
                 "api_key": self.LOCAL_LLM_API_KEY,
             }
-        if model_key.startswith("deepseek"):
+        if model_key.lower().startswith("deepseek"):
             return {
                 "model": (
                     self.DEEPSEEK_V4_PRO_MODEL_NAME
-                    if "pro" in model_key
+                    if "pro" in model_key.lower()
                     else self.DEEPSEEK_V4_FLASH_MODEL_NAME
                 ),
                 "base_url": self.DEEPSEEK_LLM_URL,
                 "api_key": self.DEEPSEEK_API_KEY,
             }
-        elif model_key.startswith("qwen"):
+        elif model_key.lower().startswith("qwen"):
             return {
                 "model": self.QWEN3_7_FLASH_MODEL_NAME,
                 "base_url": self.QWEN_LLM_URL,
