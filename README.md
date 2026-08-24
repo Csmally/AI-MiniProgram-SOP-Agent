@@ -119,7 +119,7 @@ npm run dev
 │   │   └── config.py        # 配置管理
 │   ├── sop/models.py        # Pydantic 数据模型
 │   ├── tools/
-│   │   ├── minium_tools.py     # 8 个自动化工具（LLM 调用面）
+│   │   ├── minium_tools.py     # 12 个自动化工具（LLM 调用面）
 │   │   └── minium_session.py   # minium 会话单例（全局锁 + 自动重建）
 ├── frontend/
 │   └── src/
