@@ -79,6 +79,12 @@ class Settings:
         return _env("MINIUM_ENABLED").lower() == "true" and bool(self.MINIUM_PROJECT_PATH) and bool(self.MINIUM_DEV_TOOL_PATH)
 
     # ─────────────────────────────────────
+    # 认证（登录 + 会话隔离）
+    # ─────────────────────────────────────
+    JWT_SECRET: str = _env("JWT_SECRET", "dev-secret-change-me")
+    JWT_EXPIRE_DAYS: int = int(_env("JWT_EXPIRE_DAYS", "7"))
+
+    # ─────────────────────────────────────
     # 服务
     # ─────────────────────────────────────
     HOST: str = _env("HOST", "127.0.0.1")

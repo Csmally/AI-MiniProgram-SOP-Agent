@@ -46,14 +46,27 @@ export function useSession() {
 
   const refreshSessions = useCallback(async () => {
     try {
-      const res = await fetch('/api/sessions');
-      const data = await res.json();
+      const data = await api.listSessions();
       const list = data.sessions || [];
       setSessions(list);
       return list;
     } catch {
       return [];
     }
+  }, []);
+
+  // 退出登录时清空内存态（防换账号后串会话）
+  const reset = useCallback(() => {
+    setSessionId(null);
+    setPhase('idle');
+    setFeatures([]);
+    setCheckItems([]);
+    setCheckResults([]);
+    setReport(null);
+    setMessages([]);
+    setSessions([]);
+    setLoading(false);
+    setAgentProgress({});
   }, []);
 
   const init = useCallback(async () => {
@@ -218,33 +231,16 @@ export function useSession() {
     if (!sessionId) return;
     setMessages(prev => [...prev, { role: 'user', content: text }, { role: 'assistant', content: '' }]);
     setLoading(true);
+    let full = '';
     try {
-      const res = await fetch(`/api/sessions/${sessionId}/chat/stream`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: text }),
+      await api.streamChat(sessionId, text, (token) => {
+        full += token;
+        setMessages(prev => {
+          const copy = [...prev];
+          copy[copy.length - 1] = { role: 'assistant', content: full };
+          return copy;
+        });
       });
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let full = '';
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        const chunk = decoder.decode(value, { stream: true });
-        const lines = chunk.split('\n');
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const token = line.slice(6);
-            if (token === '[DONE]') continue;
-            full += token;
-            setMessages(prev => {
-              const copy = [...prev];
-              copy[copy.length - 1] = { role: 'assistant', content: full };
-              return copy;
-            });
-          }
-        }
-      }
     } catch (e) {
       setMessages(prev => {
         const copy = [...prev];
@@ -258,6 +254,6 @@ export function useSession() {
 
   return {
     sessionId, phase, features, checkItems, checkResults, report, messages, sessions, loading, agentProgress,
-    init, loadLatest, load, uploadPrd, generateSop, approveChecklist, updateItem, deleteItem, addItem, runChecks, sendMessage, deleteSession,
+    init, loadLatest, load, uploadPrd, generateSop, approveChecklist, updateItem, deleteItem, addItem, runChecks, sendMessage, deleteSession, reset,
   };
 }

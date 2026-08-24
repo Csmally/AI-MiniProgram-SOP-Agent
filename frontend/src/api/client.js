@@ -1,103 +1,144 @@
 const BASE = '/api';
+const TOKEN_KEY = 'sop_token';
 
-export async function createSession() {
-  const res = await fetch(`${BASE}/sessions`, { method: 'POST' });
-  if (!res.ok) throw new Error('Failed to create session');
+// ── token 存取 ──
+export function getToken() { return localStorage.getItem(TOKEN_KEY); }
+export function setToken(token) { localStorage.setItem(TOKEN_KEY, token); }
+export function clearToken() { localStorage.removeItem(TOKEN_KEY); }
+
+// 401 统一处理：清 token 并广播登出事件（App 监听后回登录页）
+export function onUnauthorized(handler) {
+  window.addEventListener('sop-unauthorized', handler);
+}
+
+function authHeaders(extra = {}) {
+  const token = getToken();
+  return token ? { ...extra, Authorization: `Bearer ${token}` } : { ...extra };
+}
+
+async function handleError(res) {
+  const data = await res.json().catch(() => ({}));
+  return new Error(data.detail || `请求失败 (${res.status})`);
+}
+
+async function request(path, options = {}) {
+  const res = await fetch(`${BASE}${path}`, { ...options, headers: authHeaders(options.headers) });
+  if (res.status === 401) {
+    clearToken();
+    window.dispatchEvent(new Event('sop-unauthorized'));
+    throw await handleError(res);
+  }
+  if (!res.ok) throw await handleError(res);
   return res.json();
 }
 
+// SSE 流式请求：只返回原始 response（401/错误处理同上，body 由调用方读流）
+async function requestStream(path, options = {}) {
+  const res = await fetch(`${BASE}${path}`, { ...options, headers: authHeaders(options.headers) });
+  if (res.status === 401) {
+    clearToken();
+    window.dispatchEvent(new Event('sop-unauthorized'));
+    throw await handleError(res);
+  }
+  if (!res.ok || !res.body) throw await handleError(res);
+  return res;
+}
+
+// ── 认证 ──
+export async function register(username, password) {
+  return request('/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+}
+
+export async function login(username, password) {
+  return request('/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username, password }),
+  });
+}
+
+export async function fetchMe() {
+  return request('/auth/me');
+}
+
+// ── 会话 ──
+export async function createSession() {
+  return request('/sessions', { method: 'POST' });
+}
+
 export async function getSession(id) {
-  const res = await fetch(`${BASE}/sessions/${id}`);
-  if (!res.ok) throw new Error('Session not found');
-  return res.json();
+  return request(`/sessions/${id}`);
+}
+
+export async function listSessions() {
+  return request('/sessions');
+}
+
+export async function deleteSession(id) {
+  return request(`/sessions/${id}`, { method: 'DELETE' });
 }
 
 export async function uploadPrd(sessionId, file) {
   const form = new FormData();
   form.append('file', file);
-  const res = await fetch(`${BASE}/sessions/${sessionId}/prd`, {
-    method: 'POST',
-    body: form,
-  });
-  if (!res.ok) throw new Error('Upload failed');
-  return res.json();
+  return request(`/sessions/${sessionId}/prd`, { method: 'POST', body: form });
 }
 
 export async function generateSop(sessionId) {
-  const res = await fetch(`${BASE}/sessions/${sessionId}/generate`, { method: 'POST' });
-  if (!res.ok) throw new Error('Generate failed');
-  return res.json();
+  return request(`/sessions/${sessionId}/generate`, { method: 'POST' });
 }
 
 export async function approveChecklist(sessionId) {
-  const res = await fetch(`${BASE}/sessions/${sessionId}/approve`, { method: 'POST' });
-  if (!res.ok) throw new Error('Approve failed');
-  return res.json();
+  return request(`/sessions/${sessionId}/approve`, { method: 'POST' });
 }
 
 export async function getCheckItems(sessionId) {
-  const res = await fetch(`${BASE}/sessions/${sessionId}/check-items`);
-  if (!res.ok) throw new Error('Failed to get check items');
-  return res.json();
+  return request(`/sessions/${sessionId}/check-items`);
 }
 
 export async function updateCheckItem(sessionId, itemId, data) {
-  const res = await fetch(`${BASE}/sessions/${sessionId}/check-items/${itemId}`, {
+  return request(`/sessions/${sessionId}/check-items/${itemId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
-  if (!res.ok) throw new Error('Update failed');
-  return res.json();
 }
 
 export async function deleteCheckItem(sessionId, itemId) {
-  const res = await fetch(`${BASE}/sessions/${sessionId}/check-items/${itemId}`, { method: 'DELETE' });
-  if (!res.ok) throw new Error('Delete failed');
-  return res.json();
+  return request(`/sessions/${sessionId}/check-items/${itemId}`, { method: 'DELETE' });
 }
 
 export async function createCheckItem(sessionId, data) {
-  const res = await fetch(`${BASE}/sessions/${sessionId}/check-items`, {
+  return request(`/sessions/${sessionId}/check-items`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
-  if (!res.ok) throw new Error('Create failed');
-  return res.json();
 }
 
 export async function runChecks(sessionId) {
-  const res = await fetch(`${BASE}/sessions/${sessionId}/run`, { method: 'POST' });
-  if (!res.ok) throw new Error('Run failed');
-  return res.json();
+  return request(`/sessions/${sessionId}/run`, { method: 'POST' });
 }
 
 export async function getReport(sessionId) {
-  const res = await fetch(`${BASE}/sessions/${sessionId}/report`);
-  if (!res.ok) throw new Error('Report not found');
-  return res.json();
-}
-
-export async function deleteSession(id) {
-  const res = await fetch(`${BASE}/sessions/${id}`, { method: 'DELETE' });
-  if (!res.ok) throw new Error('Delete failed');
-  return res.json();
+  return request(`/sessions/${sessionId}/report`);
 }
 
 export async function sendChat(sessionId, message) {
-  const res = await fetch(`${BASE}/sessions/${sessionId}/chat`, {
+  return request(`/sessions/${sessionId}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ message }),
   });
-  if (!res.ok) throw new Error('Chat failed');
-  return res.json();
 }
 
 // SSE 流式执行（run/approve）：逐事件回调 onEvent({type: 'phase'|'item'|'report'|'done'|'error', ...})
 export async function streamRun(sessionId, nextAction = 'run', onEvent) {
-  const res = await fetch(`${BASE}/sessions/${sessionId}/run/stream`, {
+  const res = await requestStream(`/sessions/${sessionId}/run/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -105,7 +146,6 @@ export async function streamRun(sessionId, nextAction = 'run', onEvent) {
       approval: nextAction === 'approve' ? 'approved' : null,
     }),
   });
-  if (!res.ok || !res.body) throw new Error(`stream failed: ${res.status}`);
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buf = '';
@@ -122,6 +162,28 @@ export async function streamRun(sessionId, nextAction = 'run', onEvent) {
         if (data === '[DONE]') continue;
         if (!data || data === '{}') continue; // 心跳
         try { onEvent(JSON.parse(data)); } catch { /* 忽略无法解析的行 */ }
+      }
+    }
+  }
+}
+
+// SSE 流式聊天：逐 token 回调 onToken
+export async function streamChat(sessionId, message, onToken) {
+  const res = await requestStream(`/sessions/${sessionId}/chat/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message }),
+  });
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = decoder.decode(value, { stream: true });
+    for (const line of chunk.split('\n')) {
+      if (line.startsWith('data: ')) {
+        const token = line.slice(6);
+        if (token !== '[DONE]') onToken(token);
       }
     }
   }

@@ -117,12 +117,13 @@ uv run python -m mcp_server
 
 ## 使用流程
 
-1. 打开 `http://localhost:5173`，自动加载最近的会话（或新建）
-2. 点击「上传 PRD」选择 Markdown 需求文档 → prd_agent 解析出功能列表
-3. 点击「生成检查清单」→ sop_agent 生成检查清单（不满意可点「重新生成」）
-4. 右侧面板审核/编辑检查项 → 「确认并开始检查」
-5. executor Agent 经 MCP server 串行逐项检查（SSE 实时进度；微信开发者工具单实例约束）→ report Agent 生成报告
-6. 左侧面板可切换/删除历史会话，会话持久化在 PostgreSQL
+1. 打开 `http://localhost:5173`，**注册/登录账号**（JWT 令牌，7 天有效；会话按用户隔离，互不可见）
+2. 登录后自动加载本人最近的会话（或新建）
+3. 点击「上传 PRD」选择 Markdown 需求文档 → prd_agent 解析出功能列表
+4. 点击「生成检查清单」→ sop_agent 生成检查清单（不满意可点「重新生成」）
+5. 右侧面板审核/编辑检查项 → 「确认并开始检查」
+6. executor Agent 经 MCP server 串行逐项检查（SSE 实时进度；微信开发者工具单实例约束）→ report Agent 生成报告
+7. 左侧面板可切换/删除历史会话，会话持久化在 PostgreSQL
 
 ## 项目结构
 
@@ -158,12 +159,17 @@ uv run python -m mcp_server
 ## 测试
 
 ```bash
-# 后端测试（示例 PRD 解析 + SOP 生成）
+# 后端测试（登录 → 建会话 → 上传示例 PRD 解析）
 uv run python -c "
 import requests
-r = requests.post('http://127.0.0.1:8000/api/sessions')
+base = 'http://127.0.0.1:8000'
+login = requests.post(base + '/api/auth/register',
+    json={'username': 'demo_user', 'password': 'demo123456'}).json()
+headers = {'Authorization': 'Bearer ' + login['token']}
+r = requests.post(base + '/api/sessions', headers=headers)
 sid = r.json()['session_id']
-r = requests.post(f'http://127.0.0.1:8000/api/sessions/{sid}/prd',
+r = requests.post(base + f'/api/sessions/{sid}/prd',
+    headers=headers,
     files={'file': open('tests/fixtures/sample_prd_user_profile.md', 'rb')})
 print(r.json()['message'])
 "

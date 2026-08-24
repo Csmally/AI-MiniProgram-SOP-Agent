@@ -28,6 +28,7 @@ class MainGraphState(MessagesState):
     """主图状态 — 继承 messages（add_messages reducer），各 Agent 子图 schema 均为其子集。"""
 
     session_id: str
+    user_id: str                                         # 归属用户 id（审计署名用；权限控制不在图内做）
     prd_content: str
     features: list[dict]
     check_items: list[dict]
@@ -43,10 +44,11 @@ class MainGraphState(MessagesState):
     error: str | None
 
 
-def create_initial_state(session_id: str) -> dict:
+def create_initial_state(session_id: str, user_id: str = "") -> dict:
     """创建新会话的初始状态（仅落盘，不触发任何节点）。"""
     return {
         "session_id": session_id,
+        "user_id": user_id,
         "messages": [AIMessage(
             content="你好！我是微信小程序 SOP 检查助手。\n\n请上传新功能的 PRD 需求文档（Markdown 格式），我会自动解析功能信息并生成 SOP 检查清单。"
         )],

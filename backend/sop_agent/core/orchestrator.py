@@ -21,14 +21,13 @@
 import uuid
 from typing import Literal
 
-from psycopg_pool import ConnectionPool
 from langgraph.graph import StateGraph, START, END
 from langgraph.graph.state import CompiledStateGraph
 from langgraph.types import interrupt
 from langgraph.checkpoint.postgres import PostgresSaver
 
 from .state import MainGraphState, SessionPhase
-from .config import get_settings
+from .db import get_pool, close_pool
 from ..agents.prd_agent import build_prd_subgraph
 from ..agents.sop_agent import build_sop_subgraph
 from ..agents.chat_agent import build_chat_subgraph
@@ -38,39 +37,16 @@ from ..agents.report_agent import build_report_subgraph
 from rich import print as rPrint
 
 # ──────────────────────────────────────────────
-# 连接池 / 图实例
+# 图实例
 # ──────────────────────────────────────────────
 
-_pool: ConnectionPool | None = None
 _graph: CompiledStateGraph | None = None
 
 
-def _get_pool() -> ConnectionPool:
-    """Postgres 连接池（图执行可能发生在 SSE worker 线程，单 Connection 非线程安全）。"""
-    global _pool
-    if _pool is None:
-        _pool = ConnectionPool(
-            conninfo=get_settings().DATABASE_URL,
-            min_size=1,
-            max_size=5,
-            kwargs={"autocommit": True, "prepare_threshold": 0},
-        )
-    return _pool
-
-
 def close() -> None:
-    """关闭连接池与图实例（FastAPI lifespan 调用）。
-
-    显式超时：等待连接归还最多 5s，避免 reload/关机时因 worker 线程
-    未结束而无限挂起（进程假死、端口被占）。
-    """
-    global _pool, _graph
-    if _pool is not None:
-        try:
-            _pool.close(timeout=5)
-        except Exception:
-            pass  # 强制关闭场景下连接可能无法归还，忽略并退出
-        _pool = None
+    """关闭连接池与图实例（FastAPI lifespan 调用）。"""
+    global _graph
+    close_pool()
     _graph = None
     # 注：minium 会话由 MCP server 进程独占，后端进程无需 dispose
 
@@ -161,7 +137,7 @@ def build_graph() -> CompiledStateGraph:
     workflow.add_edge("collect", "generate_report")
     workflow.add_edge("generate_report", END)
 
-    saver = PostgresSaver(_get_pool())
+    saver = PostgresSaver(get_pool())
     saver.setup()
     return workflow.compile(checkpointer=saver, interrupt_before=["review_list"])
 
@@ -174,15 +150,22 @@ def get_graph() -> CompiledStateGraph:
     return _graph
 
 
-def _thread_config(session_id: str) -> dict:
-    return {"configurable": {"thread_id": session_id}}
+def _thread_config(session_id: str, user_id: int | None = None) -> dict:
+    """图执行 config：thread_id 定位会话；user_id 放进 metadata——
+    langgraph 会把 config.metadata 透传给回调 handler，为未来 LangSmith 式
+    调用链追溯平台提供 session/user 归属（thread_id 本身已在回调 metadata 中）。"""
+    cfg: dict = {"configurable": {"thread_id": session_id}}
+    if user_id is not None:
+        cfg["metadata"] = {"session_id": session_id, "user_id": user_id}
+    return cfg
 
 
 # ──────────────────────────────────────────────
 # 对外统一操作 API
 # ──────────────────────────────────────────────
 
-def invoke_action(session_id: str, action: str, updates: dict | None = None) -> dict:
+def invoke_action(session_id: str, action: str, updates: dict | None = None,
+                  user_id: int | None = None) -> dict:
     """统一操作入口：input-only invoke → START 路由器（fresh run，自动丢弃 pending）。
 
     返回执行后的最新 checkpoint 状态。
@@ -193,10 +176,11 @@ def invoke_action(session_id: str, action: str, updates: dict | None = None) -> 
     rPrint("[bold green]==========准备入图==========[/bold green]")
     rPrint(payload)
     rPrint("[bold green]==========准备入图==========[/bold green]")
-    return get_graph().invoke(payload, _thread_config(session_id))
+    return get_graph().invoke(payload, _thread_config(session_id, user_id))
 
 
-def stream_action(session_id: str, action: str, updates: dict | None = None):
+def stream_action(session_id: str, action: str, updates: dict | None = None,
+                  user_id: int | None = None):
     """SSE worker 线程消费的生成器：逐事件产出 (kind, data)。
 
     kind: "updates"（graph.stream 的 {node: writes} chunk）/"done"（最终状态）。
@@ -207,9 +191,9 @@ def stream_action(session_id: str, action: str, updates: dict | None = None):
     rPrint("[bold blue]==========stream_action==========[/bold blue]")
     rPrint(f'action:{payload},updates:{payload}')
     rPrint("[bold blue]==========stream_action==========[/bold blue]")
-    for chunk in get_graph().stream(payload, _thread_config(session_id), stream_mode="updates"):
+    for chunk in get_graph().stream(payload, _thread_config(session_id, user_id), stream_mode="updates"):
         yield ("updates", chunk)
-    final = get_graph().get_state(_thread_config(session_id))
+    final = get_graph().get_state(_thread_config(session_id, user_id))
     yield ("done", final.values if final else None)
 
 
@@ -235,18 +219,23 @@ def get_session_state(session_id: str) -> dict | None:
     return checkpoint.values
 
 
-def list_sessions() -> list[dict]:
-    """列出所有会话，按最近活跃时间排序。
+def list_sessions(user_id: int) -> list[dict]:
+    """列出指定用户的会话，按最近活跃时间排序。
 
-    checkpoints 表无 created_at 列；checkpoint_id 为 uuid6（时间有序），
+    归属由 session_owners 映射表 JOIN 过滤（无主旧会话对任何用户不可见）；
+    checkpoints 表无 created_at 列，checkpoint_id 为 uuid6（时间有序），
     字典序即时间序，故用 MAX(checkpoint_id) 作为最近活跃时间。
     """
-    with _get_pool().connection() as conn:
+    with get_pool().connection() as conn:
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT thread_id, MAX(checkpoint_id) AS last_id FROM checkpoints "
-                "WHERE checkpoint_ns = '' GROUP BY thread_id "
-                "ORDER BY last_id DESC LIMIT 100"
+                "SELECT o.session_id, MAX(c.checkpoint_id) AS last_id "
+                "FROM session_owners o "
+                "JOIN checkpoints c ON c.thread_id = o.session_id AND c.checkpoint_ns = '' "
+                "WHERE o.user_id = %s "
+                "GROUP BY o.session_id "
+                "ORDER BY last_id DESC LIMIT 100",
+                (user_id,),
             )
             rows = cur.fetchall()
     result = []

@@ -3,6 +3,10 @@
 操作模式：REST = 触发 action（invoke_action）+ 读取 checkpoint 状态。
 phase 的唯一来源是后端 checkpoint，前端不再本地推断。
 
+认证与隔离：所有会话端点挂 get_current_user（JWT Bearer）依赖；
+会话归属由 session_owners 表校验（_get_owned_state），非本人会话
+（含无主旧会话）统一 404，不暴露存在性。
+
 并发约定：
 - 非 SSE 端点一律用同步 `def` —— FastAPI 自动在线程池执行，
   同步图调用（含 LLM，30~70s）不会阻塞 uvicorn 事件循环；
@@ -17,13 +21,13 @@ import threading
 import uuid
 from contextlib import contextmanager
 
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, Depends, UploadFile, File, HTTPException
 from fastapi.responses import StreamingResponse
 from langchain_core.messages import HumanMessage
 
 from ..agents import chat_agent
+from ..core import auth_store, orchestrator
 from ..core.state import create_initial_state
-from ..core import orchestrator
 from ..sop.models import (
     SessionResponse,
     ParseResultResponse,
@@ -36,8 +40,25 @@ from ..sop.models import (
     ReportResponse,
     StreamRunRequest,
 )
+from .auth import get_current_user
 
 router = APIRouter(prefix="/api")
+
+
+# ──────────────────────────────────────────────
+# 会话归属守卫（认证后的第二道闸：session 必须是本人的）
+# ──────────────────────────────────────────────
+
+def _get_owned_state(session_id: str, user: dict) -> dict:
+    """会话存在 + 归属校验，返回最新 checkpoint 状态。
+
+    统一 404：非本人会话（含无主旧会话）与不存在的会话返回相同错误，
+    不暴露他人会话的存在性。
+    """
+    state = orchestrator.get_session_state(session_id)
+    if state is None or not auth_store.is_owned(session_id, user["id"]):
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return state
 
 
 # ──────────────────────────────────────────────
@@ -45,31 +66,31 @@ router = APIRouter(prefix="/api")
 # ──────────────────────────────────────────────
 
 @router.post("/sessions", response_model=SessionResponse)
-def create_session():
+def create_session(user: dict = Depends(get_current_user)):
     # 只落盘初始状态，不跑图（修复旧版创建即跑图导致 phase 错乱的 bug）
     session_id = uuid.uuid4().hex[:12]
-    state = orchestrator.update_state(session_id, create_initial_state(session_id))
+    state = orchestrator.update_state(session_id, create_initial_state(session_id, str(user["id"])))
+    auth_store.register_owner(session_id, user["id"])   # 归属即刻生效
     return _build_session_response(state)
 
 
 @router.get("/sessions/{session_id}", response_model=SessionResponse)
-def get_session(session_id: str):
-    state = orchestrator.get_session_state(session_id)
-    if state is None:
-        raise HTTPException(status_code=404, detail="会话不存在")
-    return _build_session_response(state)
+def get_session(session_id: str, user: dict = Depends(get_current_user)):
+    return _build_session_response(_get_owned_state(session_id, user))
 
 
 @router.delete("/sessions/{session_id}")
-def del_session(session_id: str):
+def del_session(session_id: str, user: dict = Depends(get_current_user)):
+    _get_owned_state(session_id, user)
     if not orchestrator.delete_session(session_id):
         raise HTTPException(status_code=404, detail="会话不存在")
+    auth_store.remove_owner(session_id)
     return {"message": "删除成功", "session_id": session_id}
 
 
 @router.get("/sessions")
-def get_sessions():
-    sessions = orchestrator.list_sessions()
+def get_sessions(user: dict = Depends(get_current_user)):
+    sessions = orchestrator.list_sessions(user["id"])
     return {"sessions": sessions, "total": len(sessions)}
 
 
@@ -102,10 +123,8 @@ def _build_session_response(state: dict) -> SessionResponse:
 # ──────────────────────────────────────────────
 
 @router.post("/sessions/{session_id}/prd", response_model=ParseResultResponse)
-def upload_prd(session_id: str, file: UploadFile = File(...)):
-    state = orchestrator.get_session_state(session_id)
-    if state is None:
-        raise HTTPException(status_code=404, detail="会话不存在")
+def upload_prd(session_id: str, file: UploadFile = File(...), user: dict = Depends(get_current_user)):
+    _get_owned_state(session_id, user)
 
     content = file.file.read().decode("utf-8")
     with _session_exec(session_id):
@@ -116,6 +135,7 @@ def upload_prd(session_id: str, file: UploadFile = File(...)):
                 # 上传动作也记入聊天记录（消息经 add_messages 追加，刷新后仍在）
                 "messages": [HumanMessage(content=f"[上传 PRD: {file.filename}]")],
             },
+            user_id=user["id"],
         )
 
     return ParseResultResponse(
@@ -130,13 +150,11 @@ def upload_prd(session_id: str, file: UploadFile = File(...)):
 # ──────────────────────────────────────────────
 
 @router.post("/sessions/{session_id}/generate", response_model=ChecklistResponse)
-def generate_checklist(session_id: str):
-    state = orchestrator.get_session_state(session_id)
-    if state is None:
-        raise HTTPException(status_code=404, detail="会话不存在")
+def generate_checklist(session_id: str, user: dict = Depends(get_current_user)):
+    _get_owned_state(session_id, user)
 
     with _session_exec(session_id):
-        result = orchestrator.invoke_action(session_id, "generate_sop")
+        result = orchestrator.invoke_action(session_id, "generate_sop", user_id=user["id"])
     return ChecklistResponse(
         session_id=session_id,
         check_items=result.get("check_items", []),
@@ -145,13 +163,12 @@ def generate_checklist(session_id: str):
 
 
 @router.post("/sessions/{session_id}/approve", response_model=SessionResponse)
-def approve_checklist(session_id: str):
-    state = orchestrator.get_session_state(session_id)
-    if state is None:
-        raise HTTPException(status_code=404, detail="会话不存在")
+def approve_checklist(session_id: str, user: dict = Depends(get_current_user)):
+    _get_owned_state(session_id, user)
 
     with _session_exec(session_id):
-        result = orchestrator.invoke_action(session_id, "approve", {"approval": "approved"})
+        result = orchestrator.invoke_action(
+            session_id, "approve", {"approval": "approved"}, user_id=user["id"])
     return _build_session_response(result)
 
 
@@ -160,10 +177,8 @@ def approve_checklist(session_id: str):
 # ──────────────────────────────────────────────
 
 @router.get("/sessions/{session_id}/check-items", response_model=ChecklistResponse)
-def get_check_items(session_id: str):
-    state = orchestrator.get_session_state(session_id)
-    if state is None:
-        raise HTTPException(status_code=404, detail="会话不存在")
+def get_check_items(session_id: str, user: dict = Depends(get_current_user)):
+    state = _get_owned_state(session_id, user)
     return ChecklistResponse(
         session_id=session_id,
         check_items=state.get("check_items", []),
@@ -172,9 +187,9 @@ def get_check_items(session_id: str):
 
 
 @router.put("/sessions/{session_id}/check-items/{item_id}")
-def update_check_item(session_id: str, item_id: str, body: UpdateCheckItemRequest):
-    if orchestrator.get_session_state(session_id) is None:
-        raise HTTPException(status_code=404, detail="会话不存在")
+def update_check_item(session_id: str, item_id: str, body: UpdateCheckItemRequest,
+                      user: dict = Depends(get_current_user)):
+    _get_owned_state(session_id, user)
 
     # 读-改-写全程持锁，避免与其他写操作交叉
     with _session_exec(session_id):
@@ -192,9 +207,8 @@ def update_check_item(session_id: str, item_id: str, body: UpdateCheckItemReques
 
 
 @router.delete("/sessions/{session_id}/check-items/{item_id}")
-def del_check_item(session_id: str, item_id: str):
-    if orchestrator.get_session_state(session_id) is None:
-        raise HTTPException(status_code=404, detail="会话不存在")
+def del_check_item(session_id: str, item_id: str, user: dict = Depends(get_current_user)):
+    _get_owned_state(session_id, user)
     with _session_exec(session_id):
         state = orchestrator.get_session_state(session_id)
         items = [i for i in state.get("check_items", []) if i.get("id") != item_id]
@@ -203,9 +217,9 @@ def del_check_item(session_id: str, item_id: str):
 
 
 @router.post("/sessions/{session_id}/check-items")
-def add_check_item(session_id: str, body: CreateCheckItemRequest):
-    if orchestrator.get_session_state(session_id) is None:
-        raise HTTPException(status_code=404, detail="会话不存在")
+def add_check_item(session_id: str, body: CreateCheckItemRequest,
+                   user: dict = Depends(get_current_user)):
+    _get_owned_state(session_id, user)
     with _session_exec(session_id):
         state = orchestrator.get_session_state(session_id)
         new_item = {
@@ -227,12 +241,10 @@ def add_check_item(session_id: str, body: CreateCheckItemRequest):
 # ──────────────────────────────────────────────
 
 @router.post("/sessions/{session_id}/run", response_model=RunResponse)
-def run_checks(session_id: str):
-    state = orchestrator.get_session_state(session_id)
-    if state is None:
-        raise HTTPException(status_code=404, detail="会话不存在")
+def run_checks(session_id: str, user: dict = Depends(get_current_user)):
+    _get_owned_state(session_id, user)
     with _session_exec(session_id):
-        result = orchestrator.invoke_action(session_id, "run")
+        result = orchestrator.invoke_action(session_id, "run", user_id=user["id"])
     return RunResponse(
         session_id=session_id,
         message="检查执行完成",
@@ -245,10 +257,8 @@ def run_checks(session_id: str):
 # ──────────────────────────────────────────────
 
 @router.get("/sessions/{session_id}/report", response_model=ReportResponse)
-def get_report(session_id: str):
-    state = orchestrator.get_session_state(session_id)
-    if state is None:
-        raise HTTPException(status_code=404, detail="会话不存在")
+def get_report(session_id: str, user: dict = Depends(get_current_user)):
+    state = _get_owned_state(session_id, user)
     results = state.get("check_results", [])
     total = len(results)
     passed = sum(1 for r in results if r.get("status") == "passed")
@@ -266,13 +276,15 @@ def get_report(session_id: str):
 # ──────────────────────────────────────────────
 
 @router.post("/sessions/{session_id}/chat", response_model=ChatResponse)
-def chat(session_id: str, body: ChatRequest):
-    state = orchestrator.get_session_state(session_id)
-    if state is None:
-        raise HTTPException(status_code=404, detail="会话不存在")
+def chat(session_id: str, body: ChatRequest, user: dict = Depends(get_current_user)):
+    _get_owned_state(session_id, user)
 
     with _session_exec(session_id):
-        result = orchestrator.invoke_action(session_id, "chat", {"messages": [HumanMessage(content=body.message)]})
+        result = orchestrator.invoke_action(
+            session_id, "chat",
+            {"messages": [HumanMessage(content=body.message)]},
+            user_id=user["id"],
+        )
 
     reply = ""
     for m in reversed(result.get("messages", [])):
@@ -288,14 +300,14 @@ def chat(session_id: str, body: ChatRequest):
 
 
 @router.post("/sessions/{session_id}/chat/stream")
-async def chat_stream(session_id: str, body: ChatRequest):
+async def chat_stream(session_id: str, body: ChatRequest,
+                      user: dict = Depends(get_current_user)):
     """流式聊天 — 经主图调用 chat_agent（聊天逻辑唯一实现）。
 
     同步图在 worker 线程执行，chat_agent 节点内 llm.stream 逐 token 推送，
     经 thread-local 钩子 + call_soon_threadsafe 桥接成 SSE。前端 wire 格式不变。
     """
-    if orchestrator.get_session_state(session_id) is None:
-        raise HTTPException(status_code=404, detail="会话不存在")
+    _get_owned_state(session_id, user)
 
     lock = _session_lock(session_id)
     if not lock.acquire(blocking=False):
@@ -312,6 +324,7 @@ async def chat_stream(session_id: str, body: ChatRequest):
             orchestrator.invoke_action(
                 session_id, "chat",
                 {"messages": [HumanMessage(content=body.message)]},
+                user_id=user["id"],
             )
         except Exception as exc:
             loop.call_soon_threadsafe(queue.put_nowait, ("error", str(exc)))
@@ -428,9 +441,9 @@ def _extract_events(chunk: dict) -> list[dict]:
 
 
 @router.post("/sessions/{session_id}/run/stream")
-async def stream_run(session_id: str, body: StreamRunRequest):
-    if orchestrator.get_session_state(session_id) is None:
-        raise HTTPException(status_code=404, detail="会话不存在")
+async def stream_run(session_id: str, body: StreamRunRequest,
+                     user: dict = Depends(get_current_user)):
+    _get_owned_state(session_id, user)
 
     lock = _session_lock(session_id)
     if not lock.acquire(blocking=False):
@@ -446,7 +459,8 @@ async def stream_run(session_id: str, body: StreamRunRequest):
 
     def worker():
         try:
-            for kind, data in orchestrator.stream_action(session_id, action, updates):
+            for kind, data in orchestrator.stream_action(session_id, action, updates,
+                                                         user_id=user["id"]):
                 loop.call_soon_threadsafe(queue.put_nowait, (kind, data))
         except Exception as exc:
             loop.call_soon_threadsafe(queue.put_nowait, ("error", str(exc)))

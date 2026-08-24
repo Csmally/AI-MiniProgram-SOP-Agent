@@ -7,8 +7,9 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
+from .api.auth import router as auth_router
 from .api.routes import router
-from .core import orchestrator
+from .core import auth_store, orchestrator
 from .core.config import get_settings
 
 settings = get_settings()
@@ -16,7 +17,8 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期：退出时关闭 Postgres 连接池与 minium 会话。"""
+    """应用生命周期：启动时建表（users/session_owners），退出时关闭连接池。"""
+    auth_store.init_db()   # 幂等建表（IF NOT EXISTS）
     yield
     orchestrator.close()
 
@@ -42,7 +44,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 注册路由
+# 注册路由（auth 路由 + 会话路由）
+app.include_router(auth_router)
 app.include_router(router)
 
 
