@@ -1,13 +1,14 @@
 """检查执行 Agent — 每个检查项由 LLM Agent 自主驱动小程序自动化工具执行。
 
-双模式（切换点在 execute_one_item 内）：
-- minium 环境可用（minium_session.is_available()）→ LLM agent 循环
+双模式（切换点在 _pick_mode_and_run）：
+- MCP server 就绪（mcp_client.is_ready()：MCP_ENABLED + 连接成功 +
+  server 侧 minium 环境可用）→ LLM agent 循环经 MCP 调用工具
   驱动真实微信开发者工具自动化，结构化判定 passed/failed；
-- 环境缺失 → 桩实现（sleep + 固定 passed，结果标注 [桩]）。
+- MCP 不可用 → 桩实现（sleep + 固定 passed，结果标注 [桩]）。
 
 本模块是单节点子图（build_executor_subgraph）：串行循环控制
 （条件边自循环 + exec_cursor 游标）仍在主图 orchestrator（微信开发者工具
-单实例约束，无法并行自动化）。
+单实例约束，无法并行自动化；MCP server 进程独占 minium 会话）。
 """
 
 import json
@@ -20,7 +21,7 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, Tool
 
 from ..core.llm import get_llm, get_system_prompt
 from ..sop.models import CheckResult
-from ..tools import minium_session, minium_tools
+from ..tools import mcp_client
 
 from rich import print as rPrint
 
@@ -63,30 +64,19 @@ def execute_one_item(state: ExecutorAgentState) -> dict:
     rPrint(item)
     rPrint(f"[bold blue]==========execute_one_item_abcd-{run_id}==========[/bold blue]")
 
-    minium_tools.set_run_context(
-        session_id=state.get("session_id", ""),
-        run_id=run_id,
-        item_id=item.get("id", ""),
-    )
-    try:
-        if minium_session.is_available():
-            # 跨检查项执行上下文：此前检查项结果（本 run 内）随任务注入，
-            # LLM 据此跳过已完成的导航/点击，只补做本项缺失的步骤
-            prior_results = [
-                {
-                    "id": r.get("check_item_id"),
-                    "description": r.get("description"),
-                    "status": r.get("status"),
-                    "result_detail": (r.get("result_detail") or "")[:200],
-                }
-                for r in state.get("exec_results", [])
-                if r.get("run_id") == run_id
-            ]
-            result = _run_with_minium(item, run_id, prior_results)   # 真实执行
-        else:
-            result = _run_stub(item, run_id)          # 桩降级
-    finally:
-        minium_tools.clear_run_context()
+    # 跨检查项执行上下文：此前检查项结果（本 run 内）随任务注入，
+    # LLM 据此跳过已完成的导航/点击，只补做本项缺失的步骤
+    prior_results = [
+        {
+            "id": r.get("check_item_id"),
+            "description": r.get("description"),
+            "status": r.get("status"),
+            "result_detail": (r.get("result_detail") or "")[:200],
+        }
+        for r in state.get("exec_results", [])
+        if r.get("run_id") == run_id
+    ]
+    result = _pick_mode_and_run(state, item, run_id, prior_results)
 
     return {
         "exec_cursor": cursor + 1,
@@ -100,15 +90,35 @@ def execute_one_item(state: ExecutorAgentState) -> dict:
     }
 
 
+def _pick_mode_and_run(state: ExecutorAgentState, item: dict, run_id: str, prior_results: list[dict]) -> dict:
+    """工具源选择：MCP（就绪）→ 桩降级（不中断整个 run）。
+
+    MCP 失败自动降级：set_run_context 调用失败说明 server 已不可用，
+    invalidate 后落桩，下一项重新探活。
+    """
+    if mcp_client.is_ready():
+        try:
+            # 服务端 run context：截图目录 + run_id 会话隔离（LLM 不可见这些 id）
+            mcp_client.call_tool("set_run_context", {
+                "session_id": state.get("session_id", ""),
+                "run_id": run_id,
+                "item_id": item.get("id", ""),
+            })
+            return _run_with_mcp(item, run_id, prior_results)
+        except Exception:
+            mcp_client.invalidate()
+    return _run_stub(item, run_id)
+
+
 def _run_stub(item: dict, run_id: str) -> dict:
-    """桩实现（环境缺失降级路径）：保留原并行版行为。"""
+    """桩实现（MCP 不可用降级路径）：保留原并行版行为。"""
     time.sleep(0.5)
     return {
         "check_item_id": item.get("id"),
         "description": item.get("description"),
         "category": item.get("category"),
         "status": "passed",
-        "result_detail": "[桩] 检查通过 — minium 环境未配置（MINIUM_PROJECT_PATH / MINIUM_DEV_TOOL_PATH）",
+        "result_detail": "[桩] 检查通过 — MCP server 未连接或 minium 环境未配置（请先启动 python -m mcp_server）",
         "screenshots": [],
         "run_id": run_id,
     }
@@ -133,21 +143,37 @@ def _build_item_payload(item: dict, prior_results: list[dict], app_state: dict) 
     }
 
 
-def _run_with_minium(item: dict, run_id: str, prior_results: list[dict]) -> dict:
-    """真实执行：LLM agent 循环驱动 minium 工具 + 结构化判定。
+def _dispatch_tool(tc: dict) -> ToolMessage:
+    """分发 LLM 的 tool_call 到 MCP server，包成 ToolMessage（DeepSeek 只收文本）。"""
+    return ToolMessage(
+        content=str(mcp_client.call_tool(tc["name"], tc)),
+        tool_call_id=tc["id"],
+    )
+
+
+def _snapshot() -> dict:
+    """跨项上下文的小程序状态快照（MCP 失败静默降级为空，LLM 自行导航）。"""
+    try:
+        return mcp_client.call_tool("snapshot_app_state", {})
+    except Exception:
+        return {}
+
+
+def _run_with_mcp(item: dict, run_id: str, prior_results: list[dict]) -> dict:
+    """真实执行：LLM agent 循环经 MCP 驱动小程序工具 + 结构化判定。
 
     prior_results：本 run 内此前检查项的结果摘要（跨项上下文，首项为空）。
     异常隔离：连接断/LLM 异常 → 该项 failed + 错误详情，不中断整个 run。
     """
     screenshots: list[str] = []
     try:
-        llm_tools = get_llm("execute_checks").bind_tools(minium_tools.EXECUTOR_TOOLS)
+        llm_tools = get_llm("execute_checks").bind_tools(mcp_client.get_tools()[0])
         llm_plain = get_llm("execute_checks")
 
         messages: list[Any] = [
             SystemMessage(content=get_system_prompt("execute_checks")),
             HumanMessage(content=json.dumps(
-                _build_item_payload(item, prior_results, minium_tools.snapshot_app_state()),
+                _build_item_payload(item, prior_results, _snapshot()),
                 ensure_ascii=False,
             )),
         ]
@@ -181,10 +207,9 @@ def _run_with_minium(item: dict, run_id: str, prior_results: list[dict]) -> dict
                 rPrint(f"[bold green]==========调用工具-{tool_name}==========[/bold green]")
 
                 try:
-                    # 新版 langchain-core 支持直接传 ToolCall dict：内部剥 args
-                    # 并透传 tool_call_id，直接返回 ToolMessage
-                    out_msg = minium_tools.TOOL_MAP[tool_name].invoke(tc)
+                    out_msg = _dispatch_tool(tc)
                 except Exception as e:
+                    mcp_client.invalidate()   # server 疑似不可用，下次探活
                     out_msg = ToolMessage(
                         content=f"[工具执行失败: {tool_name}] {e}",
                         tool_call_id=tc["id"],

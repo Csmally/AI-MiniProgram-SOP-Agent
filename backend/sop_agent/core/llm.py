@@ -44,7 +44,7 @@ TASK_SYSTEM_PROMPTS: dict[str, str] = {
         "看图回答（toast/弹窗/按钮置灰等原生或视觉反馈只有截图能看到）；"
         "无文本元素（如图标按钮）也可截图让视觉模型描述位置；"
         "优先用 element_exists/get_text 验证元素状态；需要交互时用 tap/input_text；"
-        "切换页面用 navigate_to/switch_tab；目标元素不在当前 get_page_elements 清单"
+        "切换页面用 navigate_to/switch_tab，返回上一页用 navigate_back；目标元素不在当前 get_page_elements 清单"
         "（可能在屏外）时，用 page_scroll 每次滑动一屏（down/up）再重新获取清单，"
         "返回「无法继续滑动」表示已滑到头；"
         "页面内 scroll-view 容器（列表/侧滑区等）用 scroll_view 滚动"

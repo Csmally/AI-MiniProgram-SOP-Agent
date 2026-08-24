@@ -1,10 +1,9 @@
-"""minium 工具包 — 微信小程序自动化能力。
+"""后端工具接入层 — 只有 MCP 客户端。
 
-服务边界设计：本包只依赖 minium_session 抽象层、与 executor 无耦合。
-未来抽成独立 MCP server 时，工具定义与逻辑原样搬走，仅把
-「进程内函数调用」换成 MCP transport。
+minium 工具本体已抽成独立 MCP 服务（backend/mcp_server 包，与 sop_agent
+平级）；后端经 mcp_client 远程调用，不 import 任何 minium 相关代码。
 """
 
-from . import minium_session, minium_tools
+from . import mcp_client
 
-__all__ = ["minium_session", "minium_tools"]
+__all__ = ["mcp_client"]

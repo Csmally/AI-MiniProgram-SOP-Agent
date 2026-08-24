@@ -108,6 +108,7 @@ class FakeApp:
         self.pages: list[str] = ["pages/loginPage/index", "pages/chatPage/index"]
         self.calls: list[tuple] = []   # (method, args)
         self.fail_paths: set = set()   # 预置导航失败路径（命中即抛异常）
+        self.back_target = None        # navigate_back 后模拟停留的页面路径
         self.current_page = None       # 由 FakeMiniumSession 装配
 
     def get_current_page(self):
@@ -129,6 +130,16 @@ class FakeApp:
     def get_all_pages_path(self):
         self.calls.append(("get_all_pages_path", ()))
         return self.pages
+
+    def navigate_back(self, delta=1):
+        """对齐 minium 1.6：app.navigate_back(delta)（栈底 no-op 返回当前页）。
+
+        back_target 可预置：调用后把当前页路径设为目标（模拟回退后的页面变化）。
+        """
+        self.calls.append(("navigate_back", (delta,)))
+        if self.back_target is not None and self.current_page is not None:
+            self.current_page.path = self.back_target
+        return self.current_page
 
     def screen_shot(self, save_path=None, format="raw", use_native=False) -> None:
         self.calls.append(("screen_shot", (save_path,)))

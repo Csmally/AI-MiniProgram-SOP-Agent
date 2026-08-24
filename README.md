@@ -12,7 +12,7 @@
 | 后端 | FastAPI + LangGraph + LangChain |
 | AI | DeepSeek-V4-Pro / DeepSeek-V4-Flash / Qwen3.7-Flash |
 | 持久化 | PostgreSQL（LangGraph PostgresSaver） |
-| 小程序自动化 | minium（Python 直连微信开发者工具） |
+| 小程序自动化 | minium（MCP server 进程独占会话，直连微信开发者工具） |
 | 包管理 | uv (Python) + npm（前端） |
 
 ## 前置条件
@@ -23,7 +23,8 @@
 4. **DeepSeek API Key**（必需）
 5. Qwen API Key（可选，截图分析用）
 6. **微信开发者工具**（自动化执行需要；需手动开启服务端口：设置 → 安全设置 → 服务端口）
-7. （可选）llama.cpp 本地大模型——不依赖云端 API 的替代方案（见下方「本地 LLM」）
+7. **MCP server 已启动**（执行检查前必须先起 `uv run python -m mcp_server`，否则检查项自动降级桩；见下方「MCP server」）
+8. （可选）llama.cpp 本地大模型——不依赖云端 API 的替代方案（见下方「本地 LLM」）
 
 ## 安装
 
@@ -96,19 +97,37 @@ npm run dev
 
 - 用回云端 API：`LOCAL_LLM_ENABLED=false`（或删除该行）——恢复原有 DEEPSEEK_*/QWEN_* 任务路由
 
+### MCP server（终端 4，执行检查前必须）
+
+minium 工具集跑成独立 MCP server（FastMCP，streamable-http），executor **只经 MCP**
+调用工具（单 DevTools 实例约束由 server 进程独占保证；server 不可用时自动降级桩模式）：
+
+```bash
+uv run python -m mcp_server
+# .env 同步开启：
+#   MCP_ENABLED=true            # executor 走 MCP 调用
+#   MCP_SERVER_URL=http://127.0.0.1:8765/mcp   # 后端连接地址（默认）
+#   MCP_SERVER_PORT=8765        # server 监听端口（默认）
+```
+
+- 同一套工具也可给任意 MCP 客户端使用：`MCP_TRANSPORT=stdio uv run python -m mcp_server`
+  （Claude Desktop / Claude Code 直接接入做小程序自动化）
+- 工具集：14 个执行工具 + set_run_context / is_minium_available / snapshot_app_state
+  （server 专属），实现单一事实来源在 `backend/mcp_server/tools/minium_tools.py`
+
 ## 使用流程
 
 1. 打开 `http://localhost:5173`，自动加载最近的会话（或新建）
 2. 点击「上传 PRD」选择 Markdown 需求文档 → prd_agent 解析出功能列表
 3. 点击「生成检查清单」→ sop_agent 生成检查清单（不满意可点「重新生成」）
 4. 右侧面板审核/编辑检查项 → 「确认并开始检查」
-5. executor Agent 串行逐项检查（SSE 实时进度；微信开发者工具单实例约束）→ report Agent 生成报告
+5. executor Agent 经 MCP server 串行逐项检查（SSE 实时进度；微信开发者工具单实例约束）→ report Agent 生成报告
 6. 左侧面板可切换/删除历史会话，会话持久化在 PostgreSQL
 
 ## 项目结构
 
 ```
-├── backend/sop_agent/
+├── backend/sop_agent/          # 后端（FastAPI + LangGraph）
 │   ├── main.py              # FastAPI 入口
 │   ├── api/routes.py        # REST API + SSE 流式
 │   ├── agents/              # 5 个 Agent 子图（prd/sop/chat/executor/report）
@@ -118,9 +137,13 @@ npm run dev
 │   │   ├── llm.py           # 模型工厂（DeepSeek/Qwen 任务路由）
 │   │   └── config.py        # 配置管理
 │   ├── sop/models.py        # Pydantic 数据模型
-│   ├── tools/
-│   │   ├── minium_tools.py     # 12 个自动化工具（LLM 调用面）
-│   │   └── minium_session.py   # minium 会话单例（全局锁 + 自动重建）
+│   └── tools/
+│       └── mcp_client.py    # MCP 工具客户端（executor 经此调用工具）
+├── backend/mcp_server/         # MCP 服务（与 sop_agent 平级，独立进程）
+│   ├── server.py            # FastMCP 注册 17 个工具 + 入口
+│   └── tools/
+│       ├── minium_tools.py     # 14 个自动化工具（工具实现唯一来源）
+│       └── minium_session.py   # minium 会话单例（全局锁 + 自动重建）
 ├── frontend/
 │   └── src/
 │       ├── App.jsx
@@ -159,6 +182,6 @@ print(r.json()['message'])
 | 数据库连接失败 | 检查 `.env` 的 `DATABASE_URL`，确认 PostgreSQL 已启动 |
 | API Key 无效 | 检查 `.env` 的 `DEEPSEEK_API_KEY` 是否为真实 key |
 | 前端请求 500 | 查看后端终端日志定位错误 |
-| 检查项带 `[桩]` 前缀 | minium 环境未配置（`MINIUM_ENABLED` / 两项路径），executor 自动降级桩 |
+| 检查项带 `[桩]` 前缀 | MCP server 未启动，或 minium 环境未配置（`MINIUM_ENABLED` / 两项路径），executor 自动降级桩 |
 | 连接报「IDE service port disabled」 | 开发者工具 → 设置 → 安全设置 → 服务端口 → 开启（PITFALLS 6.1） |
 | 元素查询超时 | 开发者工具「详情 → 本地设置 → 调试基础库」降到 3.16.1 及以下（PITFALLS 6.5） |

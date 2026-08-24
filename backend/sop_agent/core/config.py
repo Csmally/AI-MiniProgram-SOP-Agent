@@ -58,6 +58,13 @@ class Settings:
     MINIUM_TEST_PORT: int = int(_env("MINIUM_TEST_PORT", "9420"))
 
     # ─────────────────────────────────────
+    # MCP server（minium 工具独立进程，可选）
+    # ─────────────────────────────────────
+    MCP_ENABLED: bool = _env("MCP_ENABLED").lower() == "true"
+    MCP_SERVER_URL: str = _env("MCP_SERVER_URL", "http://127.0.0.1:8765/mcp")
+    MCP_SERVER_PORT: int = int(_env("MCP_SERVER_PORT", "8765"))
+
+    # ─────────────────────────────────────
     # 本地 LLM（llama.cpp，可选）
     # ─────────────────────────────────────
     LOCAL_LLM_ENABLED: bool = _env("LOCAL_LLM_ENABLED").lower() == "true"

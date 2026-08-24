@@ -1,7 +1,7 @@
 """minium 工具集 — 供 executor Agent 调用的微信小程序自动化工具。
 
 架构：工具只依赖 minium_session 抽象层，与 executor 无耦合——
-未来抽成独立 MCP server 时本文件原样搬走。
+已抽成独立 MCP 服务（本包与 sop_agent 平级，后端经 mcp_client 远程调用）。
 
 元素定位策略（LLM 盲猜 selector 的解法，分三层）：
 1. 发现层：get_page_elements 抓当前页真实元素清单（解析 WXML），LLM 从中选 selector；
@@ -23,8 +23,8 @@ from lxml import etree
 from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
 
-from ..core.config import get_settings
-from ..core.llm import get_llm
+from sop_agent.core.config import get_settings
+from sop_agent.core.llm import get_llm
 from . import minium_session
 
 from rich import print as rPrint
@@ -32,6 +32,31 @@ from rich import print as rPrint
 # run context（thread-local）：executor 节点设置，screenshot 据此拼路径
 _ctx = threading.local()
 
+# 上下文来源扩展（MCP server 进程注入）：provider 返回 dict(session_id/run_id/item_id)，
+# 优先于 thread-local。MCP 工具调用落在不同线程，thread-local 无法跨调用传递；
+# in-process 模式 provider=None，行为完全不变（thread-local 隔离并发 run）。
+_context_provider = None
+
+
+def set_context_provider(fn) -> None:
+    """注入跨线程上下文提供器（仅 MCP server 进程使用）。fn 返回含
+    session_id/run_id/item_id 的 dict；传 None 恢复 thread-local 模式。"""
+    global _context_provider
+    _context_provider = fn
+
+
+def _ctx_values() -> dict:
+    """当前 run context（provider 优先，thread-local 兜底；provider 异常静默降级）。"""
+    if _context_provider is not None:
+        try:
+            return dict(_context_provider())
+        except Exception:
+            pass
+    return {
+        "session_id": getattr(_ctx, "session_id", ""),
+        "run_id": getattr(_ctx, "run_id", ""),
+        "item_id": getattr(_ctx, "item_id", ""),
+    }
 
 
 def set_run_context(session_id: str, run_id: str, item_id: str) -> None:
@@ -47,7 +72,7 @@ def clear_run_context() -> None:
 
 
 def _run(action) -> Any:
-    return minium_session.execute(action, run_id=getattr(_ctx, "run_id", ""))
+    return minium_session.execute(action, run_id=_ctx_values()["run_id"])
 
 
 # ──────────────────────────────────────────────
@@ -88,9 +113,14 @@ def _fetch_wxml(s) -> str:
 
     inner_wxml = pages[0].inner_wxml
 
-    rPrint(f"[bold red]==========工具调用结果-_fetch_wxml==========[/bold red]")
-    rPrint(inner_wxml)
-    rPrint(f"[bold red]==========工具调用结果-_fetch_wxml==========[/bold red]")
+    try:
+        # 调试打印必须不能炸工具：GBK 控制台遇到 emoji 等字符会抛
+        # UnicodeEncodeError（MCP server 进程已强制 UTF-8，此处兜底）
+        rPrint(f"[bold red]==========工具调用结果-_fetch_wxml==========[/bold red]")
+        rPrint(inner_wxml)
+        rPrint(f"[bold red]==========工具调用结果-_fetch_wxml==========[/bold red]")
+    except Exception:
+        pass
 
     return inner_wxml
 
@@ -341,6 +371,20 @@ def switch_tab(tab_path: str) -> str:
 
 
 @tool
+def navigate_back(delta: int = 1) -> str:
+    """返回上一页（等价 wx.navigateBack，页面栈回退一级）。delta: 回退层数（默认 1，超出页面栈层数时回首页）。返回回退前后的页面路径；已在页面栈底部时如实说明页面未变化。"""
+    def act(s):
+        before = _current_page_path(s)
+        s.app.navigate_back(delta)
+        after = _current_page_path(s)
+        if after and after != before:
+            return f"已返回上一页：{before} -> {after}"
+        return f"navigateBack 已调用（页面未变化：{before}，可能已在页面栈底部）"
+
+    return _run(act)
+
+
+@tool
 def get_page_elements(limit: int = 30) -> str:
     """获取当前页面真实元素清单（tag/class/id/文本，JSON 数组）。操作或断言任何页面元素前，必须先调用本工具发现真实元素，从中选取 selector——禁止凭想象猜 selector。limit: 最多返回元素个数。"""
     def act(s):
@@ -556,11 +600,12 @@ def screenshot(name: str) -> str:
 
 
 def _shot_dir() -> Path:
-    """当前 run context 下的截图目录。"""
-    session_id = getattr(_ctx, "session_id", "unknown")
-    run_id = getattr(_ctx, "run_id", "unknown")
-    item_id = getattr(_ctx, "item_id", "unknown")
-    return Path(get_settings().SESSIONS_DIR) / "screenshots" / session_id / run_id / item_id
+    """当前 run context 下的截图目录（provider 优先，见 _ctx_values）。"""
+    c = _ctx_values()
+    return (
+        Path(get_settings().SESSIONS_DIR) / "screenshots"
+        / (c["session_id"] or "unknown") / (c["run_id"] or "unknown") / (c["item_id"] or "unknown")
+    )
 
 
 @tool
@@ -599,5 +644,5 @@ def _capture(session: Any, abs_path: str) -> None:
             raise
 
 
-EXECUTOR_TOOLS = [navigate_to, switch_tab, get_page_elements, get_window_size, page_scroll, scroll_view, tap, input_text, get_text, element_exists, get_pages, screenshot, analyze_screenshot]
+EXECUTOR_TOOLS = [navigate_to, switch_tab, navigate_back, get_page_elements, get_window_size, page_scroll, scroll_view, tap, input_text, get_text, element_exists, get_pages, screenshot, analyze_screenshot]
 TOOL_MAP = {t.name: t for t in EXECUTOR_TOOLS}

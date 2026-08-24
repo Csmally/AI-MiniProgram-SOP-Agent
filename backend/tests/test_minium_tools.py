@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from sop_agent.tools import minium_tools
+from mcp_server.tools import minium_tools
 from tests.fakes import FakeElement
 
 
@@ -412,3 +412,55 @@ class TestScrollView:
         self._el(fake_session)
         with pytest.raises(RuntimeError, match="非法滚动方向"):
             minium_tools.scroll_view.invoke({"selector": ".list", "direction": "top"})
+
+
+class TestContextProvider:
+    def test_provider_overrides_thread_local(self, monkeypatch, tmp_path):
+        """MCP server 注入：provider 优先于 thread-local（跨线程调用也能拿到上下文）。"""
+        monkeypatch.setattr(minium_tools, "get_settings",
+                            lambda: SimpleNamespace(SESSIONS_DIR=str(tmp_path)))
+        minium_tools.set_run_context("thread-s", "thread-r", "thread-i")
+        minium_tools.set_context_provider(
+            lambda: {"session_id": "mcp-s", "run_id": "mcp-r", "item_id": "mcp-i"})
+        try:
+            assert minium_tools._ctx_values() == {
+                "session_id": "mcp-s", "run_id": "mcp-r", "item_id": "mcp-i"}
+            assert minium_tools._shot_dir().as_posix().endswith(
+                "screenshots/mcp-s/mcp-r/mcp-i")
+        finally:
+            minium_tools.set_context_provider(None)
+            minium_tools.clear_run_context()
+
+    def test_provider_error_falls_back_to_thread_local(self):
+        """provider 异常静默降级 thread-local（不炸工具调用）。"""
+        minium_tools.set_run_context("thread-s", "thread-r", "thread-i")
+
+        def boom():
+            raise RuntimeError("boom")
+
+        minium_tools.set_context_provider(boom)
+        try:
+            assert minium_tools._ctx_values()["session_id"] == "thread-s"
+        finally:
+            minium_tools.set_context_provider(None)
+            minium_tools.clear_run_context()
+
+
+class TestNavigateBack:
+    def test_navigate_back_reports_page_change(self, fake_session):
+        """回退成功：返回前后页面路径变化。"""
+        fake_session.page.path = "pages/testPage/index"
+        fake_session.app.back_target = "pages/imagePage/index"
+        out = minium_tools.navigate_back.invoke({})
+        assert "pages/imagePage/index" in out and "->" in out
+        assert ("navigate_back", (1,)) in fake_session.app.calls
+
+    def test_navigate_back_at_root_reports_no_change(self, fake_session):
+        """栈底回退：如实说明页面未变化，不假装成功。"""
+        out = minium_tools.navigate_back.invoke({})
+        assert "页面未变化" in out
+
+    def test_navigate_back_with_delta(self, fake_session):
+        """delta 透传：多级回退。"""
+        minium_tools.navigate_back.invoke({"delta": 2})
+        assert ("navigate_back", (2,)) in fake_session.app.calls

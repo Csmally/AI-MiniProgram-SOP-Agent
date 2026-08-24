@@ -7,7 +7,7 @@
 import os
 import time
 
-from sop_agent.tools import minium_session
+from mcp_server.tools import minium_session
 
 
 def ev(js: str):

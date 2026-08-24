@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 import minium
 
-from ..core.config import get_settings
+from sop_agent.core.config import get_settings
 
 
 class MiniumConnectError(RuntimeError):

@@ -31,8 +31,11 @@ def _item(item_id="c1"):
     }
 
 
-def test_stub_mode(minium_unavailable):
-    """桩模式：无网络，断言 [桩] passed + 游标推进 + 进度事件。"""
+def test_stub_mode(monkeypatch):
+    """桩模式：强制 MCP 不可用（不依赖 .env/真实 server 状态），断言 [桩] passed + 游标推进 + 进度事件。"""
+    from sop_agent.tools import mcp_client
+
+    monkeypatch.setattr(mcp_client, "is_ready", lambda: False)
     out = execute_one_item(_state([_item()]))
 
     assert out["exec_cursor"] == 1
@@ -43,7 +46,7 @@ def test_stub_mode(minium_unavailable):
     assert progress["item_id"] == "c1" and progress["status"] == "passed"
 
 
-def test_empty_checklist_guard(minium_unavailable):
+def test_empty_checklist_guard():
     """空清单守卫：不执行，游标保持 0（滑入 collect）。"""
     out = execute_one_item(_state([]))
     assert out["exec_cursor"] == 0
@@ -87,9 +90,26 @@ def test_clean_history_pads_unfulfilled_tool_calls():
 
 
 @needs_key
-def test_real_mode_with_fake_minium(fake_session):
-    """集成：fake minium + 真实 LLM 跑通一个检查项的完整 agent 循环。"""
+def test_real_mode_with_mcp_dispatch_and_fake_minium(fake_session, monkeypatch):
+    """集成：真实 LLM 经 MCP 分发层 + fake minium 跑通一个检查项的完整 agent 循环。"""
     from sop_agent.agents import executor_agent
+    from sop_agent.tools import mcp_client
+    from mcp_server.tools import minium_tools
+
+    # 假 MCP 层：工具调用转发到 minium_tools 同实现（fake session 支撑）
+    def fake_call(name, args):
+        if name == "set_run_context":
+            return "ok"
+        if name == "snapshot_app_state":
+            return minium_tools.snapshot_app_state()
+        return minium_tools.TOOL_MAP[name].invoke(args)
+
+    monkeypatch.setattr(mcp_client, "is_ready", lambda: True)
+    monkeypatch.setattr(mcp_client, "invalidate", lambda: None)
+    monkeypatch.setattr(mcp_client, "call_tool", fake_call)
+    # 假 MCP 工具列表：bind_tools 用真实工具 schema（无需真连 server）
+    monkeypatch.setattr(mcp_client, "get_tools",
+                        lambda: (minium_tools.EXECUTOR_TOOLS, minium_tools.TOOL_MAP))
 
     original_max = executor_agent.MAX_TOOL_ITERATIONS
     executor_agent.MAX_TOOL_ITERATIONS = 8  # 限轮加速
@@ -131,9 +151,14 @@ def test_build_item_payload_empty_context_for_first_item():
     assert payload["current_app_state"] == {}
 
 
-def test_execute_one_item_passes_prior_results_by_run_id(fake_session, monkeypatch):
-    """接线回归：按 run_id 过滤 exec_results 传给 _run_with_minium，其他 run 隔离。"""
+def test_execute_one_item_passes_prior_results_by_run_id(monkeypatch):
+    """接线回归：按 run_id 过滤 exec_results 传给 _run_with_mcp，其他 run 隔离。"""
     from sop_agent.agents import executor_agent
+    from sop_agent.tools import mcp_client
+
+    monkeypatch.setattr(mcp_client, "is_ready", lambda: True)
+    monkeypatch.setattr(mcp_client, "invalidate", lambda: None)
+    monkeypatch.setattr(mcp_client, "call_tool", lambda name, args: "ok")
 
     captured = {}
 
@@ -149,7 +174,7 @@ def test_execute_one_item_passes_prior_results_by_run_id(fake_session, monkeypat
             "run_id": run_id,
         }
 
-    monkeypatch.setattr(executor_agent, "_run_with_minium", fake_run)
+    monkeypatch.setattr(executor_agent, "_run_with_mcp", fake_run)
     state = _state([_item("c2")])
     state["exec_results"] = [
         {"check_item_id": "c1", "description": "d1", "status": "passed",
@@ -164,3 +189,54 @@ def test_execute_one_item_passes_prior_results_by_run_id(fake_session, monkeypat
     assert [r["id"] for r in captured["prior_results"]] == ["c1"]
     assert out["exec_cursor"] == 1
     assert out["exec_results"][0]["status"] == "passed"
+
+
+def test_mcp_mode_routes_to_mcp_execution(monkeypatch):
+    """MCP 就绪时：set_run_context 经 MCP 下发，_run_with_mcp 被调用。"""
+    from sop_agent.agents import executor_agent
+    from sop_agent.tools import mcp_client
+
+    calls = []
+    monkeypatch.setattr(mcp_client, "is_ready", lambda: True)
+    monkeypatch.setattr(mcp_client, "invalidate", lambda: None)
+    monkeypatch.setattr(mcp_client, "call_tool",
+                        lambda name, args: calls.append((name, args)) or "ok")
+
+    captured = {}
+
+    def fake_run(item, run_id, prior_results):
+        captured.update(item=item, run_id=run_id, prior_results=prior_results)
+        return {"check_item_id": item["id"], "description": "", "category": "ui",
+                "status": "passed", "result_detail": "ok", "screenshots": [], "run_id": run_id}
+
+    monkeypatch.setattr(executor_agent, "_run_with_mcp", fake_run)
+
+    state = _state([_item("c1")])
+    state["session_id"] = "s1"
+    out = executor_agent.execute_one_item(state)
+
+    assert captured["item"]["id"] == "c1"
+    ctx_calls = [c for c in calls if c[0] == "set_run_context"]
+    assert ctx_calls and ctx_calls[0][1] == {
+        "session_id": "s1", "run_id": "test-run", "item_id": "c1"}
+    assert out["exec_cursor"] == 1
+
+
+def test_mcp_failure_falls_back_to_stub(monkeypatch):
+    """MCP 调用失败：invalidate + 落桩（真实执行只走 MCP，无 in-process 兜底）。"""
+    from sop_agent.agents import executor_agent
+    from sop_agent.tools import mcp_client
+
+    invalidated = []
+    monkeypatch.setattr(mcp_client, "is_ready", lambda: True)
+    monkeypatch.setattr(mcp_client, "invalidate", lambda: invalidated.append(1))
+
+    def boom(name, args):
+        raise RuntimeError("server down")
+
+    monkeypatch.setattr(mcp_client, "call_tool", boom)
+
+    out = executor_agent.execute_one_item(_state([_item()]))
+    assert invalidated == [1]
+    result = out["exec_results"][0]
+    assert result["status"] == "passed" and "[桩]" in result["result_detail"]

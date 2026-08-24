@@ -34,7 +34,6 @@ from ..agents.sop_agent import build_sop_subgraph
 from ..agents.chat_agent import build_chat_subgraph
 from ..agents.executor_agent import build_executor_subgraph
 from ..agents.report_agent import build_report_subgraph
-from ..tools import minium_session
 
 from rich import print as rPrint
 
@@ -73,7 +72,7 @@ def close() -> None:
             pass  # 强制关闭场景下连接可能无法归还，忽略并退出
         _pool = None
     _graph = None
-    minium_session.dispose()
+    # 注：minium 会话由 MCP server 进程独占，后端进程无需 dispose
 
 
 # ──────────────────────────────────────────────
