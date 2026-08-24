@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from lxml import etree
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from langchain_core.tools import tool
 
 from ..core.config import get_settings
@@ -88,9 +88,9 @@ def _fetch_wxml(s) -> str:
 
     inner_wxml = pages[0].inner_wxml
 
-    rPrint(f"[bold red]==========工具调用结果-get_pages==========[/bold red]")
+    rPrint(f"[bold red]==========工具调用结果-_fetch_wxml==========[/bold red]")
     rPrint(inner_wxml)
-    rPrint(f"[bold red]==========工具调用结果-get_pages==========[/bold red]")
+    rPrint(f"[bold red]==========工具调用结果-_fetch_wxml==========[/bold red]")
 
     return inner_wxml
 
@@ -231,6 +231,39 @@ def _current_page_path(s) -> str:
         return getattr(page, "path", "") or ""
     except Exception:
         return ""
+
+
+def snapshot_app_state() -> dict:
+    """小程序当前状态快照（跨检查项执行上下文，executor 每项执行前注入）。
+
+    非 @tool（LLM 不直接调用）。会话是进程级单例，快照即上一检查项
+    结束时的真实现场：current_page 当前页面路径、all_pages 已配置页面、
+    current_page_elements 当前页元素清单（前 15 个，文本取叶子 own_text）。
+    每段独立容错：连接不可用时返回「不可用」说明而非抛异常。
+    """
+    def act(s):
+        state = {"current_page": _current_page_path(s)}
+        try:
+            state["all_pages"] = list(s.app.get_all_pages_path())
+        except Exception as e:
+            state["all_pages"] = f"不可用: {e}"
+        try:
+            state["current_page_elements"] = [
+                {"tag": e["tag"], "text": e["own_text"] or e["text"]}
+                for e in _parse_wxml(_fetch_wxml(s))[:15]
+            ]
+        except Exception as e:
+            state["current_page_elements"] = f"不可用: {e}"
+        return state
+
+    try:
+        return _run(act)
+    except Exception as e:
+        return {
+            "current_page": "",
+            "all_pages": f"不可用: {e}",
+            "current_page_elements": f"不可用: {e}",
+        }
 
 
 def _get_element(s, selector: str, inner_text: str, max_timeout: int):
@@ -385,6 +418,116 @@ def element_exists(selector: str = "", inner_text: str = "", max_timeout: int = 
 
 
 @tool
+def get_window_size() -> str:
+    """获取小程序视口（窗口）宽高，返回 JSON {"width": 宽, "height": 高}（单位 px）。用于布局/适配类检查（如判断元素是否超出屏幕宽度、内容是否超屏）和滚动量估算。"""
+    def act(s):
+        size = s.page.inner_size
+        return json.dumps(size, ensure_ascii=False)
+
+    return _run(act)
+
+
+@tool
+def page_scroll(direction: str = "down") -> str:
+    """滚动当前页面一屏（一个视口高度）。direction: down 向下（默认）/ up 向上。
+    返回自然语言说明：滑动成功时给出滚动前后位置并说明还可以继续滑动；
+    已到顶/底或页面无滚动空间时说明无法继续滑动。滚动后应重新调用
+    get_page_elements 发现新露出的元素。"""
+    def act(s):
+        p = s.page
+        viewport = max(p.inner_size.get("height", 600), 1)
+        total = p.scroll_height
+        cur = p.scroll_y
+        if direction == "down":
+            can = cur < max(total - viewport, 0)
+            target = cur + viewport
+        elif direction == "up":
+            can = cur > 0
+            target = cur - viewport
+        else:
+            raise RuntimeError(f"非法滚动方向 {direction!r}（仅支持 down/up）")
+        if can:
+            p.scroll_to(int(target), 300)
+
+        rPrint(f"[bold red]==========工具调用结果-page_scroll==========[/bold red]")
+        rPrint(f"direction={direction}, inner_size={p.inner_size}, total={total} can={can}, scrollTop {cur} -> {int(target)}")
+        rPrint(f"[bold red]==========工具调用结果-page_scroll==========[/bold red]")
+
+        if can:
+            return (
+                f"已向{'下' if direction == 'down' else '上'}滑动一屏："
+                f"scrollTop {cur} -> {int(target)}（总高 {total}，视口高 {viewport}），"
+                f"还可以继续滑动"
+            )
+        if total <= viewport:
+            return f"无法继续滑动：页面内容未超出屏幕（总高 {total} ≤ 视口高 {viewport}），无需滚动"
+        if direction == "down":
+            return f"无法继续向下滑动：已到页面底部（scrollTop {cur}，总高 {total}，视口高 {viewport}）"
+        return f"无法继续向上滑动：已在页面顶部（scrollTop {cur}）"
+
+    return _run(act)
+
+
+def _as_number(value: Any, default: float = 0) -> float:
+    """minium 运行时返回值可能是裸数值或包一层 dict（版本差异），统一取数。"""
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, dict):
+        for k in ("result", "value"):
+            if isinstance(value.get(k), (int, float)):
+                return value[k]
+    return default
+
+
+@tool
+def scroll_view(selector: str = "", inner_text: str = "", direction: str = "down") -> str:
+    """滚动页面内 scroll-view 容器一屏（scroll-view 自身滚动；page_scroll 只滚页面本身、对容器无效）。selector/inner_text 定位 scroll-view 元素（scroll-view 通常无自身文本，优先用 selector，必须来自 get_page_elements 结果）；direction: down 向下 / up 向上 / left 向左 / right 向右。返回自然语言说明：滚动成功时给出前后位置并说明还可以继续滚动；已滚到头时说明无法继续滚动。"""
+    def act(s):
+        el = _get_element(s, selector, inner_text, max_timeout=5)
+        if getattr(el, "_tag_name", "") != "scroll-view":
+            raise RuntimeError(
+                f"目标元素不是 scroll-view（tag={getattr(el, '_tag_name', '?')}），"
+                f"无法容器滚动。请用 get_page_elements 找到 scroll-view 元素再传其 selector"
+            )
+        vertical = direction in ("down", "up")
+        horizontal = direction in ("left", "right")
+        if not vertical and not horizontal:
+            raise RuntimeError(f"非法滚动方向 {direction!r}（仅支持 down/up/left/right）")
+        size = el.size or {}
+        viewport = max(_as_number(size.get("height") if vertical else size.get("width")), 1)
+        before = _as_number(el.scroll_top if vertical else el.scroll_left)
+        if direction == "down":
+            target = before + viewport
+            el.scroll_to(0, int(target))
+        elif direction == "up":
+            target = before - viewport
+            el.scroll_to(0, int(target))
+        elif direction == "right":
+            target = before + viewport
+            el.scroll_to(int(target), 0)
+        else:  # left
+            target = before - viewport
+            el.scroll_to(int(target), 0)
+        time.sleep(0.3)
+        after = _as_number(el.scroll_top if vertical else el.scroll_left)
+
+        rPrint(f"[bold red]==========工具调用结果-scroll_view==========[/bold red]")
+        rPrint(f"direction={direction}, before={before}, after={after}, target={int(target)}")
+        rPrint(f"[bold red]==========工具调用结果-scroll_view==========[/bold red]")
+
+        label = {"down": "下", "up": "上", "left": "左", "right": "右"}[direction]
+        axis = "scrollTop" if vertical else "scrollLeft"
+        if after != before:
+            return (
+                f"已向{label}滚动 scroll-view 一屏：{axis} {before} -> {after}"
+                f"（视口{'高' if vertical else '宽'} {viewport}），还可以继续滚动"
+            )
+        return f"无法继续向{label}滚动 scroll-view：已滚到头（{axis} {after} 未变化）"
+
+    return _run(act)
+
+
+@tool
 def get_pages() -> list:
     """获取小程序已配置的所有页面路径（用于发现真实页面，导航前先查）。"""
     def act(s):
@@ -432,11 +575,12 @@ def analyze_screenshot(name: str, question: str) -> str:
             raise RuntimeError(f"截图不存在: {fixed}（先调用 screenshot 工具存档）")
         b64 = base64.b64encode(abs_path.read_bytes()).decode("ascii")
         llm = get_llm("screenshot_analysis")
+        system = SystemMessage(content="你是截图视觉分析助手，请始终使用中文回答。")
         msg = HumanMessage(content=[
             {"type": "text", "text": question},
             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
         ])
-        resp = llm.invoke([msg])
+        resp = llm.invoke([system, msg])
         return str(resp.content)
 
     return act(None)   # 纯文件 + LLM，不占 minium 会话锁、不要求 DevTools 连接
@@ -455,5 +599,5 @@ def _capture(session: Any, abs_path: str) -> None:
             raise
 
 
-EXECUTOR_TOOLS = [navigate_to, switch_tab, get_page_elements, tap, input_text, get_text, element_exists, get_pages, screenshot, analyze_screenshot]
+EXECUTOR_TOOLS = [navigate_to, switch_tab, get_page_elements, get_window_size, page_scroll, scroll_view, tap, input_text, get_text, element_exists, get_pages, screenshot, analyze_screenshot]
 TOOL_MAP = {t.name: t for t in EXECUTOR_TOOLS}

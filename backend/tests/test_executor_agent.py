@@ -105,3 +105,62 @@ def test_real_mode_with_fake_minium(fake_session):
     assert result["run_id"] == "test-run"
     # 工具链真实打通：fake minium（app 或 page）记录了调用
     assert len(fake_session.app.calls) + len(fake_session.page.calls) > 0
+
+
+def test_build_item_payload_includes_cross_item_context():
+    """上下文注入：负载包含此前检查项结果 + 小程序当前状态。"""
+    from sop_agent.agents.executor_agent import _build_item_payload
+
+    payload = _build_item_payload(
+        _item(),
+        [{"id": "c0", "description": "此前项", "status": "passed", "result_detail": "已通过"}],
+        {"current_page": "pages/a/index", "all_pages": [], "current_page_elements": []},
+    )
+    assert payload["check_item_id"] == "c1"
+    assert payload["previous_check_results"][0]["id"] == "c0"
+    assert payload["previous_check_results"][0]["status"] == "passed"
+    assert payload["current_app_state"]["current_page"] == "pages/a/index"
+
+
+def test_build_item_payload_empty_context_for_first_item():
+    """首个检查项：无前项、无状态快照时字段为空（LLM 自行导航），不抛异常。"""
+    from sop_agent.agents.executor_agent import _build_item_payload
+
+    payload = _build_item_payload(_item(), [], {})
+    assert payload["previous_check_results"] == []
+    assert payload["current_app_state"] == {}
+
+
+def test_execute_one_item_passes_prior_results_by_run_id(fake_session, monkeypatch):
+    """接线回归：按 run_id 过滤 exec_results 传给 _run_with_minium，其他 run 隔离。"""
+    from sop_agent.agents import executor_agent
+
+    captured = {}
+
+    def fake_run(item, run_id, prior_results):
+        captured.update(item=item, run_id=run_id, prior_results=prior_results)
+        return {
+            "check_item_id": item["id"],
+            "description": item.get("description"),
+            "category": item.get("category"),
+            "status": "passed",
+            "result_detail": "ok",
+            "screenshots": [],
+            "run_id": run_id,
+        }
+
+    monkeypatch.setattr(executor_agent, "_run_with_minium", fake_run)
+    state = _state([_item("c2")])
+    state["exec_results"] = [
+        {"check_item_id": "c1", "description": "d1", "status": "passed",
+         "result_detail": "ok", "run_id": "test-run"},
+        {"check_item_id": "old", "description": "d0", "status": "failed",
+         "result_detail": "ok", "run_id": "other-run"},  # 其他 run 应被过滤
+    ]
+
+    out = executor_agent.execute_one_item(state)
+
+    assert captured["run_id"] == "test-run"
+    assert [r["id"] for r in captured["prior_results"]] == ["c1"]
+    assert out["exec_cursor"] == 1
+    assert out["exec_results"][0]["status"] == "passed"

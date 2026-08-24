@@ -70,7 +70,19 @@ def execute_one_item(state: ExecutorAgentState) -> dict:
     )
     try:
         if minium_session.is_available():
-            result = _run_with_minium(item, run_id)   # 真实执行
+            # 跨检查项执行上下文：此前检查项结果（本 run 内）随任务注入，
+            # LLM 据此跳过已完成的导航/点击，只补做本项缺失的步骤
+            prior_results = [
+                {
+                    "id": r.get("check_item_id"),
+                    "description": r.get("description"),
+                    "status": r.get("status"),
+                    "result_detail": (r.get("result_detail") or "")[:200],
+                }
+                for r in state.get("exec_results", [])
+                if r.get("run_id") == run_id
+            ]
+            result = _run_with_minium(item, run_id, prior_results)   # 真实执行
         else:
             result = _run_stub(item, run_id)          # 桩降级
     finally:
@@ -102,9 +114,29 @@ def _run_stub(item: dict, run_id: str) -> dict:
     }
 
 
-def _run_with_minium(item: dict, run_id: str) -> dict:
+def _build_item_payload(item: dict, prior_results: list[dict], app_state: dict) -> dict:
+    """构造单个检查项的任务消息负载（纯函数，可单测）。
+
+    跨检查项执行上下文：previous_check_results（此前检查项结果，本 run 内）
+    与 current_app_state（小程序当前真实状态）随任务一起注入，供 LLM 对照
+    判断哪些步骤已完成、避免重复导航/重复点击。首项时两者为空。
+    """
+    return {
+        "check_item_id": item.get("id"),
+        "category": item.get("category"),
+        "description": item.get("description"),
+        "priority": item.get("priority"),
+        "check_steps": item.get("check_steps", []),
+        "expected_result": item.get("expected_result", ""),
+        "previous_check_results": prior_results,
+        "current_app_state": app_state,
+    }
+
+
+def _run_with_minium(item: dict, run_id: str, prior_results: list[dict]) -> dict:
     """真实执行：LLM agent 循环驱动 minium 工具 + 结构化判定。
 
+    prior_results：本 run 内此前检查项的结果摘要（跨项上下文，首项为空）。
     异常隔离：连接断/LLM 异常 → 该项 failed + 错误详情，不中断整个 run。
     """
     screenshots: list[str] = []
@@ -114,14 +146,10 @@ def _run_with_minium(item: dict, run_id: str) -> dict:
 
         messages: list[Any] = [
             SystemMessage(content=get_system_prompt("execute_checks")),
-            HumanMessage(content=json.dumps({
-                "check_item_id": item.get("id"),
-                "category": item.get("category"),
-                "description": item.get("description"),
-                "priority": item.get("priority"),
-                "check_steps": item.get("check_steps", []),
-                "expected_result": item.get("expected_result", ""),
-            }, ensure_ascii=False)),
+            HumanMessage(content=json.dumps(
+                _build_item_payload(item, prior_results, minium_tools.snapshot_app_state()),
+                ensure_ascii=False,
+            )),
         ]
 
         # 工具循环：LLM 决定调用，观察结果，直至停止或达上限

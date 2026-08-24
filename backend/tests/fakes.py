@@ -15,6 +15,12 @@ class FakeElement:
         self.clicked = False
         self.inputs: list[str] = []
         self.on_click = None   # 测试钩子：click 时调用
+        self._tag_name: str = "view"          # scroll_view 工具校验 tag 用
+        self.scroll_top: int = 0              # scroll-view 当前滚动位置
+        self.scroll_left: int = 0
+        self.size: dict = {"width": 375, "height": 600}   # 元素可视尺寸（对齐 Rect）
+        self.scroll_content_height: int = 800  # 内容总高（scroll_to 钳位用）
+        self.scroll_content_width: int = 800
 
     @property
     def inner_text(self) -> str:
@@ -40,6 +46,11 @@ class FakeElement:
     def input(self, text: str) -> None:
         self.inputs.append(text)
 
+    def scroll_to(self, x=0, y=0):
+        """对齐 minium：scroll-view 滚动到指定位置（运行时钳位到 [0, 内容−视口]）。"""
+        self.scroll_top = max(0, min(y, max(self.scroll_content_height - self.size["height"], 0)))
+        self.scroll_left = max(0, min(x, max(self.scroll_content_width - self.size["width"], 0)))
+
 
 class FakePage:
     """假页面：get_element / get_elements / element_is_exists（minium 1.6 都在 CurrentPage 上）。
@@ -53,6 +64,18 @@ class FakePage:
         self.calls: list[tuple] = []   # (method, args)
         self.page_wxml: str = ""       # 当前页 WXML（测试预置）
         self.path: str = "pages/index/index"   # 当前页面路径（tap 跳转验证用）
+        self.scroll_height: int = 800  # 页面总高（page_scroll 用）
+        self.scroll_y: int = 0         # 当前滚动位置（scroll_to 后更新）
+        self.inner_size: dict = {"width": 375, "height": 600}   # 视口尺寸
+
+    def scroll_to(self, scroll_top, duration=300):
+        """对齐 minium 1.6：page.scroll_to(scroll_top, duration)。
+
+        scrollTop 由运行时钳位到 [0, 总高−视口高]（与真实 pageScrollTo 一致）。
+        """
+        self.calls.append(("scroll_to", (scroll_top, duration)))
+        max_top = max(self.scroll_height - self.inner_size["height"], 0)
+        self.scroll_y = max(0, min(scroll_top, max_top))
 
     def get_element(self, selector, inner_text="", max_timeout=5, **kwargs):
         self.calls.append(("get_element", (selector, inner_text, max_timeout)))

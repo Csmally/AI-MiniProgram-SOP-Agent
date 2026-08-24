@@ -245,7 +245,8 @@ class TestAnalyzeScreenshot:
         finally:
             minium_tools.clear_run_context()
         assert out == "看到了一个按钮"
-        msg = fake.calls[0][0]
+        system, msg = fake.calls[0]
+        assert "中文" in system.content
         assert msg.content[0]["text"] == "有没有按钮？"
         url = msg.content[1]["image_url"]["url"]
         assert url.startswith("data:image/png;base64,")
@@ -276,3 +277,138 @@ class TestAnalyzeScreenshot:
                 minium_tools.analyze_screenshot.invoke({"name": "../../.env", "question": "q"})
         finally:
             minium_tools.clear_run_context()
+
+
+class TestSnapshotAppState:
+    def test_returns_page_path_all_pages_and_elements(self, fake_session):
+        """快照：当前页路径 + 已配置页面 + 当前页元素清单（fake WXML 解析）。"""
+        fake_session.page.path = "pages/imagePage/index"
+        fake_session.app.pages = ["pages/imagePage/index", "pages/testPage/index"]
+        fake_session.page.page_wxml = (
+            '<page><view><button id="jump">跳转页面</button></view></page>'
+        )
+
+        snap = minium_tools.snapshot_app_state()
+
+        assert snap["current_page"] == "pages/imagePage/index"
+        assert snap["all_pages"] == ["pages/imagePage/index", "pages/testPage/index"]
+        assert any("跳转页面" in e["text"] for e in snap["current_page_elements"])
+
+    def test_leaf_own_text_used_over_descendant_concat(self, fake_session):
+        """元素文本取叶子 own_text，避免父容器与子元素重复文本。"""
+        fake_session.page.page_wxml = (
+            '<page><view><text>跳转页面</text></view></page>'
+        )
+        snap = minium_tools.snapshot_app_state()
+        texts = {e["text"] for e in snap["current_page_elements"]}
+        assert "跳转页面" in texts
+
+    def test_graceful_when_execute_raises(self, monkeypatch):
+        """连接不可用时不抛异常，返回「不可用」说明（executor 首项也能拿到空上下文）。"""
+        def boom(action, **kwargs):
+            raise RuntimeError("connection refused")
+
+        monkeypatch.setattr(minium_tools.minium_session, "execute", boom)
+        snap = minium_tools.snapshot_app_state()
+        assert snap["current_page"] == ""
+        assert "不可用" in snap["all_pages"]
+        assert "不可用" in snap["current_page_elements"]
+
+
+class TestPageScroll:
+    def test_scroll_down_one_screen_reports_continue(self, fake_session):
+        """每次滑动一屏：视口 600 → scrollTop 0 -> 600，说明还可以继续滑动。"""
+        fake_session.page.scroll_height = 2000
+        out = minium_tools.page_scroll.invoke({"direction": "down"})
+        assert "0 -> 600" in out and "还可以继续滑动" in out
+        assert fake_session.page.scroll_y == 600
+
+    def test_scroll_down_at_bottom_reports_end(self, fake_session):
+        """滑到头：说明无法继续滑动且不再发起滚动。总高 800、视口 600 → 最大 scrollTop 200。"""
+        fake_session.page.scroll_height = 800
+        out1 = minium_tools.page_scroll.invoke({"direction": "down"})
+        assert "还可以继续滑动" in out1
+        assert fake_session.page.scroll_y == 200   # 运行时钳位到最大可滚动位置
+        out2 = minium_tools.page_scroll.invoke({"direction": "down"})
+        assert "无法继续向下滑动" in out2
+        assert fake_session.page.scroll_y == 200   # 位置不变
+        scroll_calls = [c for c in fake_session.page.calls if c[0] == "scroll_to"]
+        assert len(scroll_calls) == 1              # 第二次没有再发起滚动
+
+    def test_scroll_up_reports_continue_from_middle(self, fake_session):
+        fake_session.page.scroll_height = 2000
+        fake_session.page.scroll_y = 600
+        out = minium_tools.page_scroll.invoke({"direction": "up"})
+        assert "600 -> 0" in out and "还可以继续滑动" in out
+        assert fake_session.page.scroll_y == 0
+
+    def test_scroll_up_at_top_reports_end(self, fake_session):
+        out = minium_tools.page_scroll.invoke({"direction": "up"})
+        assert "无法继续向上滑动" in out
+        assert all(c[0] != "scroll_to" for c in fake_session.page.calls)
+
+    def test_no_scroll_space_is_reported(self, fake_session):
+        """内容未超屏（总高 ≤ 视口）：说明无需滚动，不发起滚动。"""
+        fake_session.page.scroll_height = 500
+        out = minium_tools.page_scroll.invoke({"direction": "down"})
+        assert "未超出屏幕" in out
+        assert all(c[0] != "scroll_to" for c in fake_session.page.calls)
+
+    def test_invalid_direction_raises(self, fake_session):
+        with pytest.raises(RuntimeError, match="非法滚动方向"):
+            minium_tools.page_scroll.invoke({"direction": "left"})
+
+
+class TestGetWindowSize:
+    def test_returns_width_and_height(self, fake_session):
+        fake_session.page.inner_size = {"width": 375, "height": 812}
+        out = json.loads(minium_tools.get_window_size.invoke({}))
+        assert out == {"width": 375, "height": 812}
+
+
+class TestScrollView:
+    def _el(self, fake_session):
+        el = fake_session.page.elements.setdefault(".list", FakeElement())
+        el._tag_name = "scroll-view"
+        return el
+
+    def test_scroll_down_one_viewport_reports_continue(self, fake_session):
+        """容器滚一屏：内容 2000、视口 600 → scrollTop 0 -> 600，说明还可以继续滚动。"""
+        el = self._el(fake_session)
+        el.scroll_content_height = 2000
+        out = minium_tools.scroll_view.invoke({"selector": ".list", "direction": "down"})
+        assert "0 -> 600" in out and "还可以继续滚动" in out
+        assert el.scroll_top == 600
+
+    def test_scroll_down_at_bottom_reports_end(self, fake_session):
+        """滚到头：内容 800、视口 600 → 最大 scrollTop 200，第二次说明无法继续。"""
+        el = self._el(fake_session)
+        out1 = minium_tools.scroll_view.invoke({"selector": ".list", "direction": "down"})
+        assert "还可以继续滚动" in out1
+        assert el.scroll_top == 200
+        out2 = minium_tools.scroll_view.invoke({"selector": ".list", "direction": "down"})
+        assert "无法继续向下滚动" in out2
+        assert el.scroll_top == 200
+
+    def test_scroll_up_at_top_reports_end(self, fake_session):
+        self._el(fake_session)
+        out = minium_tools.scroll_view.invoke({"selector": ".list", "direction": "up"})
+        assert "无法继续向上滚动" in out
+
+    def test_scroll_left_reports_continue(self, fake_session):
+        el = self._el(fake_session)
+        el.scroll_left = 300
+        out = minium_tools.scroll_view.invoke({"selector": ".list", "direction": "left"})
+        assert "300 -> 0" in out and "还可以继续滚动" in out
+        assert el.scroll_left == 0
+
+    def test_non_scroll_view_element_raises(self, fake_session):
+        """目标不是 scroll-view：报可读错误提示换元素，而不是静默失败。"""
+        fake_session.page.elements.setdefault(".btn", FakeElement())  # 默认 tag=view
+        with pytest.raises(RuntimeError, match="不是 scroll-view"):
+            minium_tools.scroll_view.invoke({"selector": ".btn"})
+
+    def test_invalid_direction_raises(self, fake_session):
+        self._el(fake_session)
+        with pytest.raises(RuntimeError, match="非法滚动方向"):
+            minium_tools.scroll_view.invoke({"selector": ".list", "direction": "top"})
