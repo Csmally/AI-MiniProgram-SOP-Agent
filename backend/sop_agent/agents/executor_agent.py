@@ -98,11 +98,12 @@ def _pick_mode_and_run(state: ExecutorAgentState, item: dict, run_id: str, prior
     """
     if mcp_client.is_ready():
         try:
-            # 服务端 run context：截图目录 + run_id 会话隔离（LLM 不可见这些 id）
+            # 服务端 run context：截图目录 + run_id 会话隔离 + 调用链归属（LLM 不可见这些 id）
             mcp_client.call_tool("set_run_context", {
                 "session_id": state.get("session_id", ""),
                 "run_id": run_id,
                 "item_id": item.get("id", ""),
+                "user_id": state.get("user_id", ""),
             })
             return _run_with_mcp(item, run_id, prior_results)
         except Exception:
@@ -111,7 +112,7 @@ def _pick_mode_and_run(state: ExecutorAgentState, item: dict, run_id: str, prior
 
 
 def _run_stub(item: dict, run_id: str) -> dict:
-    """桩实现（MCP 不可用降级路径）：保留原并行版行为。"""
+    """桩实现（MCP 不可用降级路径）：不连 DevTools，直接标记通过。"""
     time.sleep(0.5)
     return {
         "check_item_id": item.get("id"),

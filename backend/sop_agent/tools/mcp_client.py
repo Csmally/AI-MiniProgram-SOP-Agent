@@ -1,12 +1,12 @@
 """MCP 工具客户端 — executor 在 MCP 模式下经此调用独立 MCP server 的 minium 工具。
 
 设计要点：
-- opt-in：settings.MCP_ENABLED=false 时本模块完全旁路（in-process 直连不变）；
+- opt-in：settings.MCP_ENABLED=false 时本模块完全旁路；
 - 懒加载 + 缓存：首次 get_tools() 建 MultiServerMCPClient 并拉取工具列表；
 - 同步封装：后端 LangGraph 全同步（PITFALLS：避免 Windows 事件循环问题），
   MCP 工具是异步的——优先同步 invoke，NotImplemented 时 asyncio.run 兜底
   （工具调用秒级，loop 创建开销可忽略）；
-- 失败即读错误：连接失败 → executor 按 MCP → in-process → 桩 三级降级。
+- 失败即读错误：连接失败 → executor 落桩降级（下一项重新探活）。
 """
 
 import asyncio

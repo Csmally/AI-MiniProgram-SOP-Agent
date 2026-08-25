@@ -14,7 +14,7 @@ from mcp_server.tools import minium_tools
 
 SAMPLE_WXML = """<page><view><button id="submit-btn">提交订单</button></view></page>"""
 
-# 13 个执行工具 + 3 个 server 专属（set_run_context/is_minium_available/snapshot_app_state）
+# 14 个执行工具 + 3 个 server 专属（set_run_context/is_minium_available/snapshot_app_state）
 EXPECTED_TOOL_NAMES = {
     "navigate_to", "switch_tab", "navigate_back", "get_page_elements", "get_window_size",
     "page_scroll", "scroll_view", "tap", "input_text", "get_text",
@@ -49,7 +49,7 @@ def test_set_run_context_feeds_screenshot_dir(fake_session, server_ctx, monkeypa
 
 
 def test_registered_tap_is_same_implementation(fake_session, server_ctx):
-    """注册的 tap 与 in-process 同一实现：文本定位点击 fake 元素。"""
+    """注册的 tap 与 minium_tools 直调同一实现：文本定位点击 fake 元素。"""
     fake_session.page.page_wxml = SAMPLE_WXML
     out = minium_tools.tap.func(selector="", inner_text="提交订单", max_timeout=5)
     assert "已点击" in out

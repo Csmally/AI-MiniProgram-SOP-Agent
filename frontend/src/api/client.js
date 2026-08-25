@@ -92,14 +92,6 @@ export async function generateSop(sessionId) {
   return request(`/sessions/${sessionId}/generate`, { method: 'POST' });
 }
 
-export async function approveChecklist(sessionId) {
-  return request(`/sessions/${sessionId}/approve`, { method: 'POST' });
-}
-
-export async function getCheckItems(sessionId) {
-  return request(`/sessions/${sessionId}/check-items`);
-}
-
 export async function updateCheckItem(sessionId, itemId, data) {
   return request(`/sessions/${sessionId}/check-items/${itemId}`, {
     method: 'PUT',
@@ -117,22 +109,6 @@ export async function createCheckItem(sessionId, data) {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
-  });
-}
-
-export async function runChecks(sessionId) {
-  return request(`/sessions/${sessionId}/run`, { method: 'POST' });
-}
-
-export async function getReport(sessionId) {
-  return request(`/sessions/${sessionId}/report`);
-}
-
-export async function sendChat(sessionId, message) {
-  return request(`/sessions/${sessionId}/chat`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ message }),
   });
 }
 

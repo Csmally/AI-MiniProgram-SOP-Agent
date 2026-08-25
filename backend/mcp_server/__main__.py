@@ -1,4 +1,4 @@
-"""MCP server 启动入口：uv run python -m sop_agent.mcp_server。"""
+"""MCP server 启动入口：uv run python -m mcp_server。"""
 
 import sys
 

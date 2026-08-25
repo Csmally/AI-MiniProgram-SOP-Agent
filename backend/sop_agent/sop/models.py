@@ -121,21 +121,3 @@ class ChecklistResponse(BaseModel):
     message: str
 
 
-class ChatResponse(BaseModel):
-    """对话响应。"""
-    reply: str
-    session_id: str
-
-
-class RunResponse(BaseModel):
-    """检查执行响应。"""
-    session_id: str
-    message: str
-    total_items: int
-
-
-class ReportResponse(BaseModel):
-    """报告响应。"""
-    session_id: str
-    report_content: str
-    summary: dict

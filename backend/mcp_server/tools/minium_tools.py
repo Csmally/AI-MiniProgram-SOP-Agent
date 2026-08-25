@@ -14,7 +14,6 @@ import base64
 import hashlib
 import json
 import re
-import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -29,46 +28,30 @@ from . import minium_session
 
 from rich import print as rPrint
 
-# run context（thread-local）：executor 节点设置，screenshot 据此拼路径
-_ctx = threading.local()
-
-# 上下文来源扩展（MCP server 进程注入）：provider 返回 dict(session_id/run_id/item_id)，
-# 优先于 thread-local。MCP 工具调用落在不同线程，thread-local 无法跨调用传递；
-# in-process 模式 provider=None，行为完全不变（thread-local 隔离并发 run）。
+# 上下文来源（MCP server 进程注入）：provider 返回 dict(session_id/run_id/item_id)。
+# MCP 工具调用落在不同线程，线程局部变量无法跨调用传递，故用进程级 provider；
+# 未注入 provider（测试等场景）时各字段为空串。
 _context_provider = None
 
 
 def set_context_provider(fn) -> None:
-    """注入跨线程上下文提供器（仅 MCP server 进程使用）。fn 返回含
-    session_id/run_id/item_id 的 dict；传 None 恢复 thread-local 模式。"""
+    """注入跨调用上下文提供器（仅 MCP server 进程使用）。fn 返回含
+    session_id/run_id/item_id 的 dict；传 None 恢复空上下文。"""
     global _context_provider
     _context_provider = fn
 
 
 def _ctx_values() -> dict:
-    """当前 run context（provider 优先，thread-local 兜底；provider 异常静默降级）。"""
+    """当前 run context（provider 提供；异常或未注入时静默降级为空）。
+
+    兜底形状与 provider 侧（_server_ctx）一致，消费点可直接下标任意键。
+    """
     if _context_provider is not None:
         try:
             return dict(_context_provider())
         except Exception:
             pass
-    return {
-        "session_id": getattr(_ctx, "session_id", ""),
-        "run_id": getattr(_ctx, "run_id", ""),
-        "item_id": getattr(_ctx, "item_id", ""),
-    }
-
-
-def set_run_context(session_id: str, run_id: str, item_id: str) -> None:
-    _ctx.session_id = session_id
-    _ctx.run_id = run_id
-    _ctx.item_id = item_id
-
-
-def clear_run_context() -> None:
-    _ctx.session_id = ""
-    _ctx.run_id = ""
-    _ctx.item_id = ""
+    return {"session_id": "", "run_id": "", "item_id": "", "user_id": ""}
 
 
 def _run(action) -> Any:
@@ -600,7 +583,7 @@ def screenshot(name: str) -> str:
 
 
 def _shot_dir() -> Path:
-    """当前 run context 下的截图目录（provider 优先，见 _ctx_values）。"""
+    """当前 run context 下的截图目录（见 _ctx_values）。"""
     c = _ctx_values()
     return (
         Path(get_settings().SESSIONS_DIR) / "screenshots"
@@ -625,7 +608,13 @@ def analyze_screenshot(name: str, question: str) -> str:
             {"type": "text", "text": question},
             {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
         ])
-        resp = llm.invoke([system, msg])
+        # 跨进程覆盖：视觉模型调用在 MCP server 进程，包 trace_scope 写同一张 trace_runs
+        from sop_agent.tracing import trace_scope
+
+        ctx = _ctx_values()
+        user_id = ctx.get("user_id") or None
+        with trace_scope(ctx["session_id"] or "unknown", int(user_id) if user_id else None):
+            resp = llm.invoke([system, msg])
         return str(resp.content)
 
     return act(None)   # 纯文件 + LLM，不占 minium 会话锁、不要求 DevTools 连接
@@ -645,4 +634,3 @@ def _capture(session: Any, abs_path: str) -> None:
 
 
 EXECUTOR_TOOLS = [navigate_to, switch_tab, navigate_back, get_page_elements, get_window_size, page_scroll, scroll_view, tap, input_text, get_text, element_exists, get_pages, screenshot, analyze_screenshot]
-TOOL_MAP = {t.name: t for t in EXECUTOR_TOOLS}

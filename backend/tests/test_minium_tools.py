@@ -230,7 +230,9 @@ class TestAnalyzeScreenshot:
             minium_tools, "get_settings", lambda: SimpleNamespace(SESSIONS_DIR=str(tmp_path))
         )
         monkeypatch.setattr(minium_tools, "get_llm", lambda task: fake)
-        minium_tools.set_run_context(session_id="s1", run_id="r1", item_id="i1")
+        # 对齐 MCP server 生产路径：上下文由 provider 注入
+        minium_tools.set_context_provider(
+            lambda: {"session_id": "s1", "run_id": "r1", "item_id": "i1"})
         shot_dir = minium_tools._shot_dir()
         shot_dir.mkdir(parents=True)
         (shot_dir / "a.png").write_bytes(b"\x89PNG fake")
@@ -243,7 +245,7 @@ class TestAnalyzeScreenshot:
                 {"name": "a.png", "question": "有没有按钮？"}
             )
         finally:
-            minium_tools.clear_run_context()
+            minium_tools.set_context_provider(None)
         assert out == "看到了一个按钮"
         system, msg = fake.calls[0]
         assert "中文" in system.content
@@ -258,7 +260,7 @@ class TestAnalyzeScreenshot:
         try:
             out = minium_tools.analyze_screenshot.invoke({"name": "a", "question": "q"})
         finally:
-            minium_tools.clear_run_context()
+            minium_tools.set_context_provider(None)
         assert out == "看到了一个按钮"
 
     def test_missing_file_raises(self, monkeypatch, tmp_path):
@@ -267,7 +269,7 @@ class TestAnalyzeScreenshot:
             with pytest.raises(RuntimeError, match="截图不存在"):
                 minium_tools.analyze_screenshot.invoke({"name": "nope.png", "question": "q"})
         finally:
-            minium_tools.clear_run_context()
+            minium_tools.set_context_provider(None)
 
     def test_illegal_name_rejected(self, monkeypatch, tmp_path):
         """拒绝带路径分隔符/..的名字（防 LLM 被注入时越界读文件）。"""
@@ -276,7 +278,7 @@ class TestAnalyzeScreenshot:
             with pytest.raises(RuntimeError, match="非法截图名"):
                 minium_tools.analyze_screenshot.invoke({"name": "../../.env", "question": "q"})
         finally:
-            minium_tools.clear_run_context()
+            minium_tools.set_context_provider(None)
 
 
 class TestSnapshotAppState:
@@ -415,11 +417,10 @@ class TestScrollView:
 
 
 class TestContextProvider:
-    def test_provider_overrides_thread_local(self, monkeypatch, tmp_path):
-        """MCP server 注入：provider 优先于 thread-local（跨线程调用也能拿到上下文）。"""
+    def test_provider_supplies_context(self, monkeypatch, tmp_path):
+        """MCP server 注入：跨线程的工具调用从 provider 拿到上下文。"""
         monkeypatch.setattr(minium_tools, "get_settings",
                             lambda: SimpleNamespace(SESSIONS_DIR=str(tmp_path)))
-        minium_tools.set_run_context("thread-s", "thread-r", "thread-i")
         minium_tools.set_context_provider(
             lambda: {"session_id": "mcp-s", "run_id": "mcp-r", "item_id": "mcp-i"})
         try:
@@ -429,21 +430,19 @@ class TestContextProvider:
                 "screenshots/mcp-s/mcp-r/mcp-i")
         finally:
             minium_tools.set_context_provider(None)
-            minium_tools.clear_run_context()
 
-    def test_provider_error_falls_back_to_thread_local(self):
-        """provider 异常静默降级 thread-local（不炸工具调用）。"""
-        minium_tools.set_run_context("thread-s", "thread-r", "thread-i")
+    def test_provider_error_falls_back_to_empty_context(self):
+        """provider 异常静默降级为空上下文（形状与 _server_ctx 对齐，消费点可直接下标）。"""
 
         def boom():
             raise RuntimeError("boom")
 
         minium_tools.set_context_provider(boom)
         try:
-            assert minium_tools._ctx_values()["session_id"] == "thread-s"
+            assert minium_tools._ctx_values() == {
+                "session_id": "", "run_id": "", "item_id": "", "user_id": ""}
         finally:
             minium_tools.set_context_provider(None)
-            minium_tools.clear_run_context()
 
 
 class TestNavigateBack:

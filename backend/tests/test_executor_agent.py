@@ -97,19 +97,21 @@ def test_real_mode_with_mcp_dispatch_and_fake_minium(fake_session, monkeypatch):
     from mcp_server.tools import minium_tools
 
     # 假 MCP 层：工具调用转发到 minium_tools 同实现（fake session 支撑）
+    tool_map = {t.name: t for t in minium_tools.EXECUTOR_TOOLS}
+
     def fake_call(name, args):
         if name == "set_run_context":
             return "ok"
         if name == "snapshot_app_state":
             return minium_tools.snapshot_app_state()
-        return minium_tools.TOOL_MAP[name].invoke(args)
+        return tool_map[name].invoke(args)
 
     monkeypatch.setattr(mcp_client, "is_ready", lambda: True)
     monkeypatch.setattr(mcp_client, "invalidate", lambda: None)
     monkeypatch.setattr(mcp_client, "call_tool", fake_call)
     # 假 MCP 工具列表：bind_tools 用真实工具 schema（无需真连 server）
     monkeypatch.setattr(mcp_client, "get_tools",
-                        lambda: (minium_tools.EXECUTOR_TOOLS, minium_tools.TOOL_MAP))
+                        lambda: (minium_tools.EXECUTOR_TOOLS, tool_map))
 
     original_max = executor_agent.MAX_TOOL_ITERATIONS
     executor_agent.MAX_TOOL_ITERATIONS = 8  # 限轮加速
@@ -218,7 +220,7 @@ def test_mcp_mode_routes_to_mcp_execution(monkeypatch):
     assert captured["item"]["id"] == "c1"
     ctx_calls = [c for c in calls if c[0] == "set_run_context"]
     assert ctx_calls and ctx_calls[0][1] == {
-        "session_id": "s1", "run_id": "test-run", "item_id": "c1"}
+        "session_id": "s1", "run_id": "test-run", "item_id": "c1", "user_id": ""}
     assert out["exec_cursor"] == 1
 
 

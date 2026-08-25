@@ -11,14 +11,16 @@ from .api.auth import router as auth_router
 from .api.routes import router
 from .core import auth_store, orchestrator
 from .core.config import get_settings
+from .tracing import init_trace_db
 
 settings = get_settings()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """应用生命周期：启动时建表（users/session_owners），退出时关闭连接池。"""
+    """应用生命周期：启动时建表（users/session_owners/trace_runs），退出时关闭连接池。"""
     auth_store.init_db()   # 幂等建表（IF NOT EXISTS）
+    init_trace_db()        # 调用链追溯表
     yield
     orchestrator.close()
 

@@ -19,7 +19,6 @@ class SessionPhase(str, enum.Enum):
     IDLE = "idle"
     PRD_UPLOADED = "prd_uploaded"
     SOP_GENERATED = "sop_generated"
-    READY = "ready"
     RUNNING = "running"
     COMPLETED = "completed"
 

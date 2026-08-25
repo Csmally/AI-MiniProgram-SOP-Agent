@@ -4,9 +4,7 @@ import * as api from '../api/client';
 export function useSession() {
   const [sessionId, setSessionId] = useState(null);
   const [phase, setPhase] = useState('idle');
-  const [features, setFeatures] = useState([]);
   const [checkItems, setCheckItems] = useState([]);
-  const [checkResults, setCheckResults] = useState([]);
   const [report, setReport] = useState(null);
   const [messages, setMessages] = useState([]);
   const [sessions, setSessions] = useState([]);
@@ -20,7 +18,6 @@ export function useSession() {
       const data = await api.getSession(sid);
       setSessionId(data.session_id);
       setPhase(data.current_phase);
-      setFeatures(data.features || []);
       setCheckItems(data.check_items || []);
       setMessages(data.messages || []);
       setAgentProgress({});
@@ -59,9 +56,7 @@ export function useSession() {
   const reset = useCallback(() => {
     setSessionId(null);
     setPhase('idle');
-    setFeatures([]);
     setCheckItems([]);
-    setCheckResults([]);
     setReport(null);
     setMessages([]);
     setSessions([]);
@@ -75,7 +70,6 @@ export function useSession() {
       const data = await api.createSession();
       setSessionId(data.session_id);
       setPhase(data.current_phase);
-      setFeatures(data.features || []);
       setCheckItems(data.check_items || []);
       setMessages(data.messages || []);
       setReport(null);
@@ -103,7 +97,6 @@ export function useSession() {
       } else {
         setSessionId(null);
         setPhase('idle');
-        setFeatures([]);
         setCheckItems([]);
         setMessages([]);
         setReport(null);
@@ -138,7 +131,6 @@ export function useSession() {
           const passed = results.filter(r => r.status === 'passed').length;
           const failed = results.filter(r => r.status === 'failed').length;
           setPhase(event.state.current_phase || 'completed');
-          setCheckResults(results);
           setReport({
             report_content: event.state.report_content || '',
             summary: {
@@ -253,7 +245,7 @@ export function useSession() {
   }, [sessionId]);
 
   return {
-    sessionId, phase, features, checkItems, checkResults, report, messages, sessions, loading, agentProgress,
+    sessionId, phase, checkItems, report, messages, sessions, loading, agentProgress,
     init, loadLatest, load, uploadPrd, generateSop, approveChecklist, updateItem, deleteItem, addItem, runChecks, sendMessage, deleteSession, reset,
   };
 }

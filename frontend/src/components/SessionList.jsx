@@ -3,7 +3,7 @@ import Modal from './Modal';
 
 const PHASE_LABELS = {
   idle: '空闲', prd_uploaded: 'PRD已上传', sop_generated: '清单已生成',
-  ready: '就绪', running: '检查中', completed: '已完成',
+  running: '检查中', completed: '已完成',
 };
 
 export default function SessionList({ sessions, currentId, onSelect, onNew, onDelete }) {

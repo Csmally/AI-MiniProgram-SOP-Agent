@@ -30,9 +30,6 @@ class FakeElement:
     def inner_wxml(self) -> str:
         return self._wxml
 
-    def click(self) -> None:
-        self.tap()
-
     def styles(self, name: str = ""):
         return None
 
@@ -53,14 +50,13 @@ class FakeElement:
 
 
 class FakePage:
-    """假页面：get_element / get_elements / element_is_exists（minium 1.6 都在 CurrentPage 上）。
+    """假页面：get_element / get_elements（minium 1.6 都在 CurrentPage 上）。
 
     page_wxml 可预置当前页 WXML（get_page_elements / 文本定位解析用）。
     """
 
     def __init__(self):
         self.elements: dict[str, FakeElement] = {}
-        self.exists: dict[str, bool] = {}
         self.calls: list[tuple] = []   # (method, args)
         self.page_wxml: str = ""       # 当前页 WXML（测试预置）
         self.path: str = "pages/index/index"   # 当前页面路径（tap 跳转验证用）
@@ -86,11 +82,6 @@ class FakePage:
         if selector == "page":
             return [FakeElement(wxml=self.page_wxml)]
         return []
-
-    def element_is_exists(self, selector=None, max_timeout=10, inner_text=None,
-                          text_contains=None, value=None, xpath=None) -> bool:
-        self.calls.append(("element_is_exists", (selector,)))
-        return self.exists.get(selector, True)
 
 
 class FakeApp:

@@ -6,7 +6,6 @@ import ReportView from './ReportView';
 export default function RightPanel({ session }) {
   switch (session.phase) {
     case 'sop_generated':
-    case 'ready':
       return (
         <ChecklistView
           items={session.checkItems}

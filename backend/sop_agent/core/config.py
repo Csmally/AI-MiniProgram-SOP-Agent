@@ -130,9 +130,6 @@ class Settings:
         # 未知 provider — 返回空配置
         return {"model": model_key, "base_url": "", "api_key": ""}
 
-    def get_llm_api_key(self, model_key: str) -> str:
-        return self.get_llm_config(model_key).get("api_key", "")
-
 
 @lru_cache
 def get_settings() -> Settings:

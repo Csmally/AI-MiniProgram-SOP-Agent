@@ -28,16 +28,14 @@ from langchain_core.messages import HumanMessage
 from ..agents import chat_agent
 from ..core import auth_store, orchestrator
 from ..core.state import create_initial_state
+from ..tracing import delete_session_traces
 from ..sop.models import (
     SessionResponse,
     ParseResultResponse,
     ChecklistResponse,
-    ChatResponse,
     ChatRequest,
     UpdateCheckItemRequest,
     CreateCheckItemRequest,
-    RunResponse,
-    ReportResponse,
     StreamRunRequest,
 )
 from .auth import get_current_user
@@ -85,6 +83,7 @@ def del_session(session_id: str, user: dict = Depends(get_current_user)):
     if not orchestrator.delete_session(session_id):
         raise HTTPException(status_code=404, detail="会话不存在")
     auth_store.remove_owner(session_id)
+    delete_session_traces(session_id)   # 调用链数据级联清理
     return {"message": "删除成功", "session_id": session_id}
 
 
@@ -176,16 +175,6 @@ def approve_checklist(session_id: str, user: dict = Depends(get_current_user)):
 # 检查项管理（持久化式更新，不触发图）
 # ──────────────────────────────────────────────
 
-@router.get("/sessions/{session_id}/check-items", response_model=ChecklistResponse)
-def get_check_items(session_id: str, user: dict = Depends(get_current_user)):
-    state = _get_owned_state(session_id, user)
-    return ChecklistResponse(
-        session_id=session_id,
-        check_items=state.get("check_items", []),
-        message=f"共 {len(state.get('check_items', []))} 个检查项",
-    )
-
-
 @router.put("/sessions/{session_id}/check-items/{item_id}")
 def update_check_item(session_id: str, item_id: str, body: UpdateCheckItemRequest,
                       user: dict = Depends(get_current_user)):
@@ -237,67 +226,8 @@ def add_check_item(session_id: str, body: CreateCheckItemRequest,
 
 
 # ──────────────────────────────────────────────
-# 检查执行
-# ──────────────────────────────────────────────
-
-@router.post("/sessions/{session_id}/run", response_model=RunResponse)
-def run_checks(session_id: str, user: dict = Depends(get_current_user)):
-    _get_owned_state(session_id, user)
-    with _session_exec(session_id):
-        result = orchestrator.invoke_action(session_id, "run", user_id=user["id"])
-    return RunResponse(
-        session_id=session_id,
-        message="检查执行完成",
-        total_items=len(result.get("check_results", [])),
-    )
-
-
-# ──────────────────────────────────────────────
-# 报告
-# ──────────────────────────────────────────────
-
-@router.get("/sessions/{session_id}/report", response_model=ReportResponse)
-def get_report(session_id: str, user: dict = Depends(get_current_user)):
-    state = _get_owned_state(session_id, user)
-    results = state.get("check_results", [])
-    total = len(results)
-    passed = sum(1 for r in results if r.get("status") == "passed")
-    failed = sum(1 for r in results if r.get("status") == "failed")
-    return ReportResponse(
-        session_id=session_id,
-        report_content=state.get("report_content", ""),
-        summary={"total": total, "passed": passed, "failed": failed,
-                  "pass_rate": f"{passed/total*100:.0f}%" if total > 0 else "N/A"},
-    )
-
-
-# ──────────────────────────────────────────────
 # AI 对话
 # ──────────────────────────────────────────────
-
-@router.post("/sessions/{session_id}/chat", response_model=ChatResponse)
-def chat(session_id: str, body: ChatRequest, user: dict = Depends(get_current_user)):
-    _get_owned_state(session_id, user)
-
-    with _session_exec(session_id):
-        result = orchestrator.invoke_action(
-            session_id, "chat",
-            {"messages": [HumanMessage(content=body.message)]},
-            user_id=user["id"],
-        )
-
-    reply = ""
-    for m in reversed(result.get("messages", [])):
-        if isinstance(m, dict):
-            if m.get("role") in ("assistant", "ai"):
-                reply = m.get("content", "")
-                break
-        elif getattr(m, "type", "") == "ai":
-            reply = getattr(m, "content", "")
-            break
-
-    return ChatResponse(reply=reply, session_id=session_id)
-
 
 @router.post("/sessions/{session_id}/chat/stream")
 async def chat_stream(session_id: str, body: ChatRequest,

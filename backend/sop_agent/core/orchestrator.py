@@ -28,6 +28,7 @@ from langgraph.checkpoint.postgres import PostgresSaver
 
 from .state import MainGraphState, SessionPhase
 from .db import get_pool, close_pool
+from ..tracing import trace_scope
 from ..agents.prd_agent import build_prd_subgraph
 from ..agents.sop_agent import build_sop_subgraph
 from ..agents.chat_agent import build_chat_subgraph
@@ -176,7 +177,8 @@ def invoke_action(session_id: str, action: str, updates: dict | None = None,
     rPrint("[bold green]==========准备入图==========[/bold green]")
     rPrint(payload)
     rPrint("[bold green]==========准备入图==========[/bold green]")
-    return get_graph().invoke(payload, _thread_config(session_id, user_id))
+    with trace_scope(session_id, user_id):
+        return get_graph().invoke(payload, _thread_config(session_id, user_id))
 
 
 def stream_action(session_id: str, action: str, updates: dict | None = None,
@@ -191,10 +193,12 @@ def stream_action(session_id: str, action: str, updates: dict | None = None,
     rPrint("[bold blue]==========stream_action==========[/bold blue]")
     rPrint(f'action:{payload},updates:{payload}')
     rPrint("[bold blue]==========stream_action==========[/bold blue]")
-    for chunk in get_graph().stream(payload, _thread_config(session_id, user_id), stream_mode="updates"):
-        yield ("updates", chunk)
-    final = get_graph().get_state(_thread_config(session_id, user_id))
-    yield ("done", final.values if final else None)
+    # 生成器在 worker 线程迭代——trace_scope 的 ContextVar 随该线程生效
+    with trace_scope(session_id, user_id):
+        for chunk in get_graph().stream(payload, _thread_config(session_id, user_id), stream_mode="updates"):
+            yield ("updates", chunk)
+        final = get_graph().get_state(_thread_config(session_id, user_id))
+        yield ("done", final.values if final else None)
 
 
 def update_state(session_id: str, values: dict) -> dict:

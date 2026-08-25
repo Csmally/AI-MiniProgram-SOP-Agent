@@ -89,12 +89,6 @@ def _is_connection_error(e: Exception) -> bool:
     ))
 
 
-def dispose() -> None:
-    """释放会话单例（orchestrator.close 调用）。"""
-    with _lock:
-        _dispose_locked()
-
-
 def _dispose_locked() -> None:
     global _session, _session_run_id
     # minium 无显式 close API，置空引用即释放（DevTools 自动化连接随之回收）

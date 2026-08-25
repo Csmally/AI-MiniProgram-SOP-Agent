@@ -200,7 +200,7 @@
 ### 6.8 相对路径解析规则 + tabBar 限制（真机探针验证）
 - **现象**：导航 fail errMsg 为 `page "pages/chatPage/pages/giftPage/index" is not found`——传 `pages/giftPage/index`，运行时却按 `pages/chatPage/` 前缀解析；换路径后报 `can not navigateTo a tabbar page`
 - **根因**：①该 app 的自定义 wx 代理把**无前缀相对 url 按当前页目录**解析（不是微信原生的根目录解析）；②目标页是 tabBar 页，navigateTo 被微信规则拒绝，必须 switchTab（本项目 4 个页面全是 tabBar 页）
-- **结局（2026-08-18）**：两条根因最终定位为 minium 原生 API 的路径契约（见 6.3），工具已回归原生方法。本条的探针方法保留价值：`backend/probe_nav.py` 可用于真机复测与后续元素查询排查
+- **结局（2026-08-18）**：两条根因最终定位为 minium 原生 API 的路径契约（见 6.3），工具已回归原生方法。
 
 ## 7. 结构化输出
 
