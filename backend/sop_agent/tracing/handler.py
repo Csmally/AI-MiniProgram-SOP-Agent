@@ -6,8 +6,10 @@
 - tool：executor 的 MCP 工具调用（入参/结果）
 
 父子层级：configure hook 继承的 run 没有原生 parent_run_id，
-用 thread-local 的 chain run 栈推断（同步串行执行，栈顶即当前父节点）。
-写库全部 try/except 吞异常——tracing 永不伤害业务。
+用实例级 chain run 栈推断（栈顶即当前父节点）。chain 事件在 worker 线程
+触发；异步工具路径的事件被派发到线程池 executor 线程，thread-local 在那边
+是空的，实例栈 + 锁保证跨线程读到父级。写库全部 try/except 吞异常——
+tracing 永不伤害业务。
 """
 
 import threading
@@ -22,36 +24,31 @@ from . import store
 class TraceCallbackHandler(BaseCallbackHandler):
     """单次图执行绑定一个实例（session_id/user_id 固定）。"""
 
-    # thread-local：当前线程的 chain run 栈（父级推断用）
-    _stacks = threading.local()
-
     def __init__(self, session_id: str, user_id: int | None = None):
         self.session_id = session_id
         self.user_id = user_id
+        # 实例级 chain run 栈 + 锁：chain 事件在 worker 线程触发，异步工具路径的
+        # 事件被派发到线程池 executor 线程——thread-local 在那边是空的，跨线程
+        # 共享实例栈才能推断父级。图执行串行（单节点单工具循环），锁无竞争。
+        self._stack: list[UUID] = []
+        self._stack_lock = threading.Lock()
 
     # ── 父级推断 ──
-
-    @classmethod
-    def _stack(cls) -> list:
-        stack = getattr(cls._stacks, "stack", None)
-        if stack is None:
-            stack = []
-            cls._stacks.stack = stack
-        return stack
 
     def _parent(self, parent_run_id) -> UUID | None:
         if parent_run_id is not None:
             return parent_run_id
-        stack = self._stack()
-        return stack[-1] if stack else None
+        with self._stack_lock:
+            return self._stack[-1] if self._stack else None
 
     def _chain_start(self, run_id: UUID) -> None:
-        self._stack().append(run_id)
+        with self._stack_lock:
+            self._stack.append(run_id)
 
     def _chain_end(self, run_id: UUID) -> None:
-        stack = self._stack()
-        if run_id in stack:
-            stack.remove(run_id)
+        with self._stack_lock:
+            if run_id in self._stack:
+                self._stack.remove(run_id)
 
     # ── chain（langgraph 节点）──
 

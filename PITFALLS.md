@@ -1,7 +1,7 @@
 # 开发坑点记录（PITFALLS）
 
 > 本项目开发中踩过的坑、根因与解决方案。**每解决一个新坑就往这里补一条**，避免重复踩。
-> 格式：现象 → 根因 → 方案。最后更新：2026-08-18。
+> 格式：现象 → 根因 → 方案。最后更新：2026-08-25。
 
 ## 目录
 
@@ -13,6 +13,7 @@
 6. [minium（微信小程序自动化）](#6-minium微信小程序自动化)
 7. [结构化输出](#7-结构化输出)
 8. [测试与调试](#8-测试与调试)
+9. [调用链追溯（tracing）](#9-调用链追溯tracing)
 
 ---
 
@@ -230,4 +231,39 @@
 ### 8.3 E2E 前先杀干净旧实例
 - **坑**：残留旧代码实例响应请求 → 测试「通过」但测的不是新代码（本项目至少踩了 3 次）
 - **方案**：每次 E2E 前 `netstat` 验证端口归属 + 确认进程启动时间；后台服务统一用 `DEBUG=false` 手动管理
+
+---
+
+## 9. 调用链追溯（tracing）
+
+### 9.1 纯异步 MCP 工具被同步 invoke → 每次调用产生两行 trace、一半没返回（2026-08-25）
+- **现象**：trace 平台里每个工具调用有两行：一行正常有返回，一行 `error='StructuredTool does not support sync invocation.'` 且 output 永远 NULL；全表 tool 行恰好 50% 无返回
+- **根因**：langchain-mcp-adapters 0.3.x 的 MCP 工具是**纯异步** `StructuredTool`（`coroutine` 非空、`func` 为 None）。旧 `call_tool` 先试同步 `tool.invoke`：langchain-core 的 `BaseTool.run` **先触发 `on_tool_start`**（trace 已落库）才进 `_run`，`_run` 里 func 为 None 抛 NotImplementedError → `on_tool_error` 给这行写上 error → 异常被 `call_tool` 捕获后 `asyncio.run(ainvoke)` 兜底再来一轮 start+end。同步尝试除了一行垃圾数据什么都没干
+- **方案**：`call_tool` 按 `tool.coroutine is not None` 判定直接走 `asyncio.run(tool.ainvoke(args))`，不要再「先试同步、NotImplemented 兜底」。存量脏数据按 error 文案过滤展示或 DELETE 清理
+- **教训**：langchain 工具的同步/异步能力先看属性（`coroutine`/`func`），别靠试异常——回调事件在异常之前就已经发出去了
+
+### 9.2 异步工具路径的 trace 事件被派发到 executor 线程 → thread-local 父级栈失效（2026-08-25）
+- **现象**：修掉 9.1 后（工具调用全走 ainvoke），tool 行 `parent_id` 为 NULL——孤儿行挂不进树
+- **根因**：AsyncCallbackManager 对同步 handler 用 `run_in_executor` 派发到**线程池 executor 线程**（`copy_context` 只携带 ContextVar，不携带 thread-local）；父级推断依赖的 thread-local chain 栈在那个线程是空的。chain 事件在 worker 线程（同步图），tool 事件在 executor 线程——两拨线程
+- **方案**：父级栈改为**实例级 list + threading.Lock**（handler 每 trace_scope 一个实例；图执行串行、单工具循环，锁无竞争）。chain 事件写栈、tool 事件跨线程读栈顶
+- **验证方式**：真机探针——monkeypatch `store.insert_run` 记录 (parent_id, thread_id)，从子线程调 `on_tool_start` 断言 parent 命中
+
+### 9.3 register_configure_hook 的使用契约（2026-08-25 确认）
+- **机制**：`register_configure_hook(context_var, inheritable=True)` 注册后，每次 `CallbackManager.configure`（即任何 invoke/ainvoke）都会检查该 ContextVar——非空则把 handler 挂进本次调用的回调管理器（按指针去重）。这就是「agent 代码零改动全量采集」的原理（LangSmith 同款机制）
+- **坑点契约**：
+  1. ContextVar 的值必须是**单个** BaseCallbackHandler，不能是 list——去重是 `handler is var_handler` 指针比较，list 永远匹配不上，会被 `add_handler` 当成单个 handler 分发时炸；
+  2. **ContextVar 不随新线程传播**——SSE 场景 `graph.stream` 在 worker 线程迭代，`trace_scope` 必须包在 worker 线程里的整个生成器执行外面，而不是发起请求的线程；
+  3. import 时注册一次、进程级全局生效、无反注册 API；
+  4. 采集点是 Runnable 回调——不经过 LangChain 的调用（裸 OpenAI SDK、裸 MCP client）采不到；
+  5. `inheritable=True` 决定 handler 进 `inheritable_handlers`（随 run 树传播到所有子 run），这是采集整条链的前提
+
+### 9.4 ToolCall 形状的 dict 必须带 type='tool_call'（2026-08-25）
+- **现象**：探针里把 `{'name':..., 'args':..., 'id':...}` 传给 `tool.invoke`，工具没执行、返回 pydantic 校验错误串（`name Unexpected keyword argument`）
+- **根因**：langchain-core 的 `_is_tool_call` 判定是 `x.get("type") == "tool_call"`——没有 type 键的 dict 不被识别为 ToolCall，整包被当工具 kwargs 传给 schema 校验。生产里 DeepSeek 返回的 tool_call 恰好带 type 才没踩
+- **方案**：自造 tool_call dict（测试/探针/手动构造）必须带 `type: "tool_call"`；或者直接传 `tc["args"]`
+
+### 9.5 tracing 的异常策略：建表要炸、写库要吞（2026-08-25）
+- **设计**：`init_db` 建表失败**不吞异常**（环境问题，启动即暴露）；handler 里所有写库 **try/except 吞掉**（tracing 永不伤害业务）
+- **代价与排查经验**：吞异常意味着出问题**没有日志**——本次定位靠的是 DB 数据本身：error 字段文案、50% 对半分布、孤儿行统计。trace 表既是产品数据也是 tracing 系统自己的调试日志
+- **教训**：怀疑 tracing 漏数据时，先对 trace_runs 做 GROUP BY 统计（kind×有无 output×有无 error），异常分布模式比日志更快定位
 

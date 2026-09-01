@@ -4,7 +4,7 @@
 - opt-in：settings.MCP_ENABLED=false 时本模块完全旁路；
 - 懒加载 + 缓存：首次 get_tools() 建 MultiServerMCPClient 并拉取工具列表；
 - 同步封装：后端 LangGraph 全同步（PITFALLS：避免 Windows 事件循环问题），
-  MCP 工具是异步的——优先同步 invoke，NotImplemented 时 asyncio.run 兜底
+  MCP 工具是异步的——按 coroutine 判定直接 asyncio.run 走 ainvoke
   （工具调用秒级，loop 创建开销可忽略）；
 - 失败即读错误：连接失败 → executor 落桩降级（下一项重新探活）。
 """
@@ -87,13 +87,19 @@ def invalidate() -> None:
 
 
 def call_tool(name: str, args: Any) -> Any:
-    """同步调用 MCP 工具（返回解包后的原始结果，非 ToolMessage）。"""
+    """同步调用 MCP 工具（返回解包后的原始结果，非 ToolMessage）。
+
+    adapters 0.3.x 的 MCP 工具是纯异步 StructuredTool（coroutine 非空、func 为
+    None）。不能先试同步 invoke：它会在 _run 抛 NotImplementedError 之前触发
+    on_tool_start/on_tool_error，给 trace_runs 留下一行没有返回值的残影。
+    直接按 coroutine 判定走 ainvoke。
+    """
     _tools, tool_map = get_tools()
     tool = tool_map[name]
-    try:
-        result = tool.invoke(args)
-    except NotImplementedError:
+    if getattr(tool, "coroutine", None) is not None:
         result = asyncio.run(tool.ainvoke(args))
+    else:
+        result = tool.invoke(args)
     return _unwrap(result)
 
 

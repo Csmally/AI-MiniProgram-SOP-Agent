@@ -1,5 +1,6 @@
 """调用链追溯单测 — 内容截断 / 父级栈推断 / token 提取（纯逻辑，不依赖真库）。"""
 
+import threading
 import uuid
 from types import SimpleNamespace
 
@@ -51,6 +52,30 @@ class TestParentInference:
         captured.clear()
         handler.on_llm_start({"name": "llm"}, ["hi"], run_id=uuid.uuid4())
         assert captured["parent_id"] is None
+
+    def test_tool_event_from_other_thread_sees_stack(self, monkeypatch):
+        """异步路径：tool 事件被派发到 executor 线程，实例栈跨线程可见。"""
+        captured = {}
+        monkeypatch.setattr(store, "insert_run", lambda **kw: captured.update(kw))
+        handler = TraceCallbackHandler("s1", 1)
+        chain_id = uuid.uuid4()
+        handler.on_chain_start({"name": "node"}, {}, run_id=chain_id)
+        captured.clear()
+
+        errors = []
+
+        def from_other_thread():
+            try:
+                handler.on_tool_start({"name": "tap"}, "{}", run_id=uuid.uuid4())
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+
+        t = threading.Thread(target=from_other_thread)
+        t.start()
+        t.join()
+        assert not errors
+        assert captured["parent_id"] == chain_id
+        assert captured["kind"] == "tool"
 
 
 class TestTokenExtraction:
